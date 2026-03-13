@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+
+# Patch/helper scripts (dev only)
+_patch_*.py
+_fix_*.py
+_build_*.py
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Streamlit local state
+.streamlit/
