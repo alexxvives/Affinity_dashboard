@@ -477,7 +477,7 @@ def build_pptx(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
     sl = prs.slides.add_slide(blank_layout)
     txb = sl.shapes.add_textbox(Inches(1), Inches(2.5), Inches(11), Inches(2))
     tf = txb.text_frame
-    tf.text = "Segment Effect Explorer"
+    tf.text = "Nsegment Explorer"
     tf.paragraphs[0].runs[0].font.size = Pt(36)
     tf.paragraphs[0].runs[0].font.bold = True
     tf.paragraphs[0].runs[0].font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
@@ -532,14 +532,15 @@ def build_pptx(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Segment Effect Explorer", layout="wide")
-st.title("Segment Effect Explorer")
+st.set_page_config(page_title="Nsegment Explorer", layout="wide")
+st.title("Nsegment Explorer")
 
 st.markdown("""
 <style>
 span[data-baseweb="tag"] { background-color: #31333F !important; }
 span[data-baseweb="tag"] span { color: #FAFAFA !important; }
 span[data-baseweb="tag"] button { color: #FAFAFA !important; }
+div.block-container { padding-top: 1.5rem !important; }
 </style>
 """, unsafe_allow_html=True)
 
