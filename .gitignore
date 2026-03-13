@@ -15,5 +15,5 @@ _build_*.py
 .DS_Store
 Thumbs.db
 
-# Streamlit local state
-.streamlit/
+# Streamlit local state (keep config.toml committed; ignore secrets)
+.streamlit/secrets.toml

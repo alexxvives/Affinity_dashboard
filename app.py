@@ -225,6 +225,7 @@ def comm_data(df: pd.DataFrame, comm: str, bal_min: float, acct_min: float) -> p
     return pd.DataFrame(rows) if rows else EMPTY
 
 
+@st.cache_data(show_spinner=False)
 def build_table(
     df: pd.DataFrame,
     ordered_comms: List[str],
@@ -397,7 +398,7 @@ def style_tbl(
     padding: 6px 10px;
     border-radius: 5px;
     font-size: 12px;
-    max-width: 420px;
+    max-width: 2100px;
     white-space: normal;
     box-shadow: 0 2px 8px rgba(0,0,0,0.5);
     pointer-events: none;
@@ -874,9 +875,9 @@ with tab_charts:
         st.divider()
 
         # ── Distribution explorer ────────────────────────────────────────────
-        st.subheader("Distribution explorer — histogram & KDE")
+        st.subheader("Distribution explorer — KDE density")
         st.caption(
-            "🔍 **Distribution explorer** — histogram + smoothed density curve for any "
+            "🔍 **Distribution explorer** — smoothed KDE density curve for any "
             "combination of segments and communication. Use this to compare the shape of responses "
             "side by side: overlapping peaks = similar behaviour; separated peaks = meaningfully "
             "different customer groups. Segmentation is only useful if groups behave differently."
@@ -908,9 +909,10 @@ with tab_charts:
                     valid   = [(g, l) for g, l in zip(groups, labels_) if len(g) >= 2]
                     if valid:
                         gv, lv = zip(*valid)
-                        fig_dist = ff.create_distplot(list(gv), list(lv), show_rug=False)
+                        _colors = list(px.colors.qualitative.Bold[:len(gv)])
+                        fig_dist = ff.create_distplot(list(gv), list(lv), show_hist=False, show_rug=False, colors=_colors)
                         fig_dist.update_xaxes(tickformat=".0%" if metric_col == "balance_pct_change" else ".2f", title=dist_metric)
-                        fig_dist.update_layout(height=480, title=f"{dist_metric} — histogram & KDE by segment")
+                        fig_dist.update_layout(height=480, title=f"{dist_metric} — KDE density by segment")
                         st.plotly_chart(fig_dist, use_container_width=True)
                         drawn = True
                 except Exception:
@@ -919,8 +921,9 @@ with tab_charts:
                     dm["_label"] = dm["nsegment"].map(lambda x: f"{x} — {SEGMENT_LABELS.get(x, '')}")
                     fig_dist = px.histogram(dm, x=metric_col, color="_label", barmode="overlay", opacity=0.65,
                                             histnorm="probability density",
+                                            color_discrete_sequence=px.colors.qualitative.Bold,
                                             labels={metric_col: dist_metric, "_label": "Segment"},
-                                            title=f"{dist_metric} — distribution by segment")
+                                            title=f"{dist_metric} — KDE density by segment")
                     if metric_col == "balance_pct_change":
                         fig_dist.update_xaxes(tickformat=".0%")
                     fig_dist.update_layout(height=480)
