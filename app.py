@@ -301,8 +301,11 @@ def style_tbl(
 
     # Drop columns based on toggles
     drop_cols = []
+    # Always drop aggregate columns from table (still available in tbl for charts)
+    _agg_keys = {"agg_bal", "agg_bal_ci", "agg_acct", "agg_acct_ci", "agg_lift_bal", "agg_lift_acct", "agg_n"}
+    drop_cols += [v for k, v in rename.items() if k in _agg_keys and v in disp.columns]
     if not show_n_cols:
-        drop_cols += [v for k, v in rename.items() if (k.endswith("_n") or k == "agg_n") and v in disp.columns]
+        drop_cols += [v for k, v in rename.items() if k.endswith("_n") and v in disp.columns]
     # Always drop CI from table (CI data stays in tbl DataFrame for chart error bars)
     drop_cols += [v for k, v in rename.items() if ("_ci" in k) and v in disp.columns]
     # Lift is an exclusive mode: show lift columns OR raw % columns, never both

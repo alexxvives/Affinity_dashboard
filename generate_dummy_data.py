@@ -260,7 +260,6 @@ def generate_dummy_dataset(
             "Communication":  communication,
             "alpha_key":      user,
             "Contact_flag":   contact_flag,
-            "control_flag":   1 - contact_flag,
             "start_date":     start_date,
             "end_date":       end_date,
             "start_balance":  round(start_balance, 2),
