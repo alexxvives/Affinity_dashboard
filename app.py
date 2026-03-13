@@ -199,7 +199,7 @@ def agg_cols_data(
 
 @st.cache_data(show_spinner=False)
 def comm_data(df: pd.DataFrame, comm: str, bal_min: float, acct_min: float) -> pd.DataFrame:
-    EMPTY = pd.DataFrame(columns=["nsegment", f"{comm}_bal", f"{comm}_bal_ci", f"{comm}_acct", f"{comm}_acct_ci", f"{comm}_n"])
+    EMPTY = pd.DataFrame(columns=["nsegment", f"{comm}_bal", f"{comm}_bal_ci", f"{comm}_acct", f"{comm}_acct_ci", f"{comm}_n", f"{comm}_lift_bal", f"{comm}_lift_acct"])
     treated = df[(df["Contact_flag"] == 1) & (df["Communication"] == comm)].copy()
     control = df[(df["control_flag"] == 1) & (df["Communication"] == comm)].copy()
     treated = treated[treated["balance_pct_change"].fillna(-np.inf)  >= bal_min]
@@ -214,8 +214,14 @@ def comm_data(df: pd.DataFrame, comm: str, bal_min: float, acct_min: float) -> p
         cib = _ci95(grp["balance_pct_change"], w)
         ma  = _wmean(grp["accounts_pct_change"], w)
         cia = _ci95(grp["accounts_pct_change"], w)
+        ctrl_grp = control[control["nsegment"] == seg]
+        cb = _wmean(ctrl_grp["balance_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
+        ca = _wmean(ctrl_grp["accounts_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
+        lift_b = (mb - cb) if not (np.isnan(mb) or np.isnan(cb)) else np.nan
+        lift_a = (ma - ca) if not (np.isnan(ma) or np.isnan(ca)) else np.nan
         rows.append({"nsegment": seg, f"{comm}_bal": mb, f"{comm}_bal_ci": cib,
-                     f"{comm}_acct": ma, f"{comm}_acct_ci": cia, f"{comm}_n": n})
+                     f"{comm}_acct": ma, f"{comm}_acct_ci": cia, f"{comm}_n": n,
+                     f"{comm}_lift_bal": lift_b, f"{comm}_lift_acct": lift_a})
     return pd.DataFrame(rows) if rows else EMPTY
 
 
@@ -242,7 +248,7 @@ def build_table(
         nc = f"{comm}_n"
         if nc in tbl.columns:
             mask = tbl[nc].fillna(0) < min_n
-            for col in [f"{comm}_bal", f"{comm}_bal_ci", f"{comm}_acct", f"{comm}_acct_ci"]:
+            for col in [f"{comm}_bal", f"{comm}_bal_ci", f"{comm}_acct", f"{comm}_acct_ci", f"{comm}_lift_bal", f"{comm}_lift_acct"]:
                 if col in tbl.columns:
                     tbl.loc[mask, col] = np.nan
     metric_cols = [c for c in tbl.columns if c != "nsegment" and not c.endswith("_n")]
@@ -296,7 +302,9 @@ def style_tbl(
         rename[f"{c}_bal_ci"] = f"{c} \u00b1CI"
         rename[f"{c}_acct"]   = f"{c} Acct%"
         rename[f"{c}_acct_ci"]= f"{c} \u00b1CI Acct"
-        rename[f"{c}_n"]      = f"{c} N"
+        rename[f"{c}_n"]          = f"{c} N"
+        rename[f"{c}_lift_bal"]   = f"{c} Lift Bal"
+        rename[f"{c}_lift_acct"]  = f"{c} Lift Acct"
     disp = disp.rename(columns=rename)
 
     # Drop columns based on toggles
@@ -310,12 +318,12 @@ def style_tbl(
     drop_cols += [v for k, v in rename.items() if ("_ci" in k) and v in disp.columns]
     # Lift is an exclusive mode: show lift columns OR raw % columns, never both
     if show_lift:
-        # hide raw % columns; keep lift columns
+        # drop per-comm raw % columns; keep per-comm lift columns
         drop_cols += [v for k, v in rename.items()
                       if v in disp.columns and "_ci" not in k and "_lift" not in k
-                      and (k in ("agg_bal", "agg_acct") or k.endswith("_bal") or k.endswith("_acct"))]
+                      and (k.endswith("_bal") or k.endswith("_acct"))]
     else:
-        # hide lift columns; keep raw % columns
+        # drop per-comm lift columns; show raw % columns
         drop_cols += [v for k, v in rename.items() if ("_lift" in k) and v in disp.columns]
     disp = disp.drop(columns=[c for c in drop_cols if c in disp.columns])
 
@@ -337,6 +345,8 @@ def style_tbl(
     styler = disp.style.format(fmt, na_rep="")
     if colour_cols:
         styler = styler.apply(_colour_col, subset=colour_cols, axis=0)
+    if n_cols:
+        styler = styler.apply(lambda s: s.map(_n_color), subset=n_cols, axis=0)
 
     # Build HTML manually to get proper CSS-hover tooltips on the nsegment index
     table_html = styler.to_html()
@@ -397,6 +407,29 @@ def style_tbl(
 <body><div style="overflow:auto; max-height: 615px;">
 {table_html}
 </div></body></html>"""
+
+
+def _n_color(val: object) -> str:
+    """Red-yellow-green background for N (sample size) cells."""
+    try:
+        n = float(val)  # type: ignore[arg-type]
+        if n != n or n <= 0:  # NaN or zero
+            return ""
+        # 0 at n=30 → 1 at n=100; clamp outside
+        ratio = min(1.0, max(0.0, (n - 30) / 70.0))
+        if ratio < 0.5:
+            t = ratio * 2
+            r = int(248 + (255 - 248) * t)
+            g = int(105 + (235 - 105) * t)
+            b = int(107 + (132 - 107) * t)
+        else:
+            t = (ratio - 0.5) * 2
+            r = int(255 + (99  - 255) * t)
+            g = int(235 + (190 - 235) * t)
+            b = int(132 + (123 - 132) * t)
+        return f"background-color: rgb({r},{g},{b}); color: #000"
+    except Exception:
+        return ""
 
 
 # ── Excel export ──────────────────────────────────────────────────────────────
@@ -561,10 +594,8 @@ with st.sidebar:
             min_value=0, max_value=20, value=5, step=1,
             help="Removes the most extreme values at both ends. 5 = clip below 5th and above 95th percentile.",
         )
-
-    recency_decay = 0.0  # treat all dates equally
-
-    with st.expander("⚠️ Exclude low-balance segments", expanded=False):
+        st.markdown("---")
+        st.markdown("**⚠️ Exclude low-balance segments**")
         st.caption(
             "Segments where customers had very little money at the start can show big % gains "
             "from a small euro increase. Set a minimum to remove them from the ranking."
@@ -574,6 +605,8 @@ with st.sidebar:
             min_value=0, max_value=10000, value=0, step=250,
         )
         bal_baseline_min = float(bal_baseline_cap_raw) if bal_baseline_cap_raw > 0 else None
+
+    recency_decay = 0.0  # treat all dates equally
 
 
 # ── Preprocess ────────────────────────────────────────────────────────────────
@@ -626,31 +659,38 @@ with tab_charts:
     if "tbl" not in dir() or tbl.empty:
         st.warning("No table data — adjust filters in the Table tab.")
     else:
+        st.caption(
+            "📊 **Top segments bar chart** — ranks segments by the selected metric. "
+            "Taller bars = stronger average effect for that communication. "
+            "Use this to decide which segments to prioritise in the next campaign wave. "
+            "Error bars (where shown) are 95% confidence intervals — wider bars mean less certainty."
+        )
         # ── Bar chart ────────────────────────────────────────────────────────
         ctrl1, ctrl2 = st.columns([1, 3])
         with ctrl1:
             top_n = st.slider("Top N segments", 5, min(150, len(tbl)), min(30, len(tbl)), key="chart_tn")
-            metric_opts = (["Bal%Δ (agg)", "Lift Bal (agg)", "Acct%Δ (agg)", "Lift Acct (agg)"]
-                           + [f"{c} Bal%"  for c in ordered_comms]
-                           + [f"{c} Acct%" for c in ordered_comms])
+            metric_opts = ([f"{c} Bal%"       for c in ordered_comms]
+                           + [f"{c} Acct%"      for c in ordered_comms]
+                           + [f"{c} Lift Bal"   for c in ordered_comms]
+                           + [f"{c} Lift Acct"  for c in ordered_comms])
             chosen = st.selectbox("Sort / highlight metric", metric_opts, key="chart_cm")
 
         col_map = {
-            "Bal%Δ (agg)":     "agg_bal",
-            "Lift Bal (agg)":  "agg_lift_bal",
-            "Acct%Δ (agg)":    "agg_acct",
-            "Lift Acct (agg)": "agg_lift_acct",
-            **{f"{c} Bal%":  f"{c}_bal"  for c in ordered_comms},
-            **{f"{c} Acct%": f"{c}_acct" for c in ordered_comms},
+            **{f"{c} Bal%":      f"{c}_bal"       for c in ordered_comms},
+            **{f"{c} Acct%":     f"{c}_acct"      for c in ordered_comms},
+            **{f"{c} Lift Bal":  f"{c}_lift_bal"  for c in ordered_comms},
+            **{f"{c} Lift Acct": f"{c}_lift_acct" for c in ordered_comms},
         }
-        sort_col = col_map.get(chosen, "agg_bal")
+        _default_sort = f"{ordered_comms[0]}_bal" if ordered_comms else ""
+        sort_col = col_map.get(chosen, _default_sort)
 
         if sort_col in tbl.columns:
             top_data = tbl[sort_col].dropna().sort_values(ascending=False).head(top_n)
-            ci_col = sort_col.replace("_bal", "_bal_ci").replace("_acct", "_acct_ci")
-            ci_col = "agg_bal_ci" if sort_col == "agg_bal" else ci_col
-            ci_col = "agg_acct_ci" if sort_col == "agg_acct" else ci_col
-            has_ci = ci_col in tbl.columns
+            if "_lift_" in sort_col:
+                ci_col = None  # lift columns have no CI band
+            else:
+                ci_col = sort_col.replace("_bal", "_bal_ci").replace("_acct", "_acct_ci")
+            has_ci = ci_col is not None and ci_col in tbl.columns
 
             x_labels = [f"{x}  {SEGMENT_LABELS.get(str(x), '')}" for x in top_data.index]
             fig_bar = px.bar(
@@ -674,6 +714,12 @@ with tab_charts:
 
         # ── Heatmap ─────────────────────────────────────────────────────────
         st.subheader("Balance % change — segment × communication")
+        st.caption(
+            "🟩 **Heatmap** — each cell is the avg balance % change for a segment (row) "
+            "at a single communication touchpoint (column). Darker green = stronger positive response. "
+            "Use this to spot which communications resonate with which segments, and identify "
+            "segments that respond early vs late in the journey."
+        )
         heat_cols = [f"{c}_bal" for c in ordered_comms if f"{c}_bal" in tbl.columns]
         if heat_cols:
             hm = tbl[heat_cols].copy()
@@ -694,7 +740,15 @@ with tab_charts:
 
         # ── Journey timeline ─────────────────────────────────────────────────
         st.subheader("🗺️ Journey Timeline — avg balance at each touchpoint")
-        jt_pool = tbl.sort_values("agg_bal", ascending=False).head(30).index.astype(str).tolist() if "agg_bal" in tbl.columns else tbl.index.astype(str).tolist()[:30]
+        st.caption(
+            "📈 **Journey timeline** — tracks how selected segments perform at each "
+            "communication touchpoint. Rising lines = improving engagement over the journey. "
+            "Flat or falling lines suggest fatigue or declining relevance at that stage. "
+            "Useful for optimising send timing and dropping ineffective touchpoints."
+        )
+        _jt_sort = next((f"{c}_bal" for c in ordered_comms if f"{c}_bal" in tbl.columns), None)
+        jt_pool = (tbl.sort_values(_jt_sort, ascending=False).head(30).index.astype(str).tolist()
+                   if _jt_sort else tbl.index.astype(str).tolist()[:30])
         jt_segs = st.multiselect(
             "Segments for timeline (top 30 by agg bal%)",
             options=jt_pool,
@@ -733,7 +787,15 @@ with tab_charts:
 
         # ── Segment co-occurrence heatmap ────────────────────────────────────
         st.subheader("🔗 Segment Co-occurrence — how often segments share the same user")
-        top_segs_cooc = tbl.sort_values("agg_bal", ascending=False).head(30).index.astype(str).tolist() if "agg_bal" in tbl.columns else tbl.index.astype(str).tolist()[:30]
+        st.caption(
+            "🧩 **Co-occurrence heatmap** — cell [A, B] = fraction of segment A users "
+            "who are also in segment B. Dark blue = heavy overlap. "
+            "If two high-performing segments overlap heavily, targeting both wastes budget — "
+            "pick the one with stronger lift. Also useful for building exclusion lists."
+        )
+        _cooc_sort = next((f"{c}_bal" for c in ordered_comms if f"{c}_bal" in tbl.columns), None)
+        top_segs_cooc = (tbl.sort_values(_cooc_sort, ascending=False).head(30).index.astype(str).tolist()
+                         if _cooc_sort else tbl.index.astype(str).tolist()[:30])
         cooc_n = st.slider("Top N segments to include", 5, min(50, len(top_segs_cooc)), min(20, len(top_segs_cooc)), key="cooc_n")
         cooc_segs = top_segs_cooc[:cooc_n]
 
@@ -778,6 +840,12 @@ with tab_charts:
 
         # ── Violin / distribution ────────────────────────────────────────────
         st.subheader("Balance % change distribution by communication")
+        st.caption(
+            "🎻 **Violin chart** — shows the full spread of individual balance changes, "
+            "not just the average. A wide violin = high variability, meaning the average is driven by "
+            "a few extreme responders. A narrow violin = consistent response across all customers. "
+            "Use this to identify segments where the average is misleading."
+        )
         pool     = tbl.index.astype(str).tolist()[:30]
         seg_pick = st.multiselect(
             "Segments to compare (top 30)",
@@ -807,6 +875,12 @@ with tab_charts:
 
         # ── Distribution explorer ────────────────────────────────────────────
         st.subheader("Distribution explorer — histogram & KDE")
+        st.caption(
+            "🔍 **Distribution explorer** — histogram + smoothed density curve for any "
+            "combination of segments and communication. Use this to compare the shape of responses "
+            "side by side: overlapping peaks = similar behaviour; separated peaks = meaningfully "
+            "different customer groups. Segmentation is only useful if groups behave differently."
+        )
         dc1, dc2, dc3 = st.columns([3, 1, 1])
         all_segs = sorted(df["nsegment"].unique().tolist())
         with dc1:
@@ -965,7 +1039,7 @@ with tab_audit:
             def _top_tbl(metric_col: str, label: str) -> None:
                 if metric_col not in tbl.columns:
                     return
-                n_col   = "agg_n" if metric_col.startswith("agg_") else None
+                n_col = next((f"{c}_n" for c in ordered_comms if metric_col.startswith(c + "_")), None)
                 cols    = [metric_col] + ([n_col] if n_col and n_col in tbl.columns else [])
                 top     = tbl[cols].dropna(subset=[metric_col]).sort_values(metric_col, ascending=False).head(10).copy()
                 top.index = [f"{x}  —  {SEGMENT_LABELS.get(str(x), '')}" for x in top.index]
@@ -977,16 +1051,18 @@ with tab_audit:
                 top.columns = ([label, "N", "Confidence"] if len(top.columns) == 3 else [label])
                 st.dataframe(top, use_container_width=True)
 
+            _fc = ordered_comms[0]  if ordered_comms else None
+            _lc = ordered_comms[-1] if ordered_comms else None
             rc1, rc2, rc3, rc4 = st.columns(4)
             with rc1:
-                st.markdown("**Top 10 — Bal% (agg)**")
-                _top_tbl("agg_bal", "Bal% Δ")
+                st.markdown(f"**Top 10 — {_fc} Bal%**")
+                if _fc: _top_tbl(f"{_fc}_bal", "Bal% Δ")
             with rc2:
-                st.markdown("**Top 10 — Acct% (agg)**")
-                _top_tbl("agg_acct", "Acct% Δ")
+                st.markdown(f"**Top 10 — {_lc} Bal%**")
+                if _lc: _top_tbl(f"{_lc}_bal", "Bal% Δ")
             with rc3:
-                st.markdown("**Top 10 — Lift Bal**")
-                _top_tbl("agg_lift_bal", "Lift Bal")
+                st.markdown(f"**Top 10 — {_fc} Lift Bal**")
+                if _fc: _top_tbl(f"{_fc}_lift_bal", "Lift Bal")
             with rc4:
-                st.markdown("**Top 10 — Lift Acct**")
-                _top_tbl("agg_lift_acct", "Lift Acct")
+                st.markdown(f"**Top 10 — {_fc} Lift Acct**")
+                if _fc: _top_tbl(f"{_fc}_lift_acct", "Lift Acct")
