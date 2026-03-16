@@ -162,6 +162,30 @@ def _all_segment_ids(df_raw: pd.DataFrame) -> List[str]:
     return sorted(segs)
 
 
+@st.fragment
+def _seg_lookup_widget(seg_ids: List[str], descriptions: Dict[str, str]) -> None:
+    """Prefix-filtered segment lookup that reruns only itself, not the whole page."""
+    typed = st.text_input(
+        "🔍 Segment Lookup",
+        placeholder="Type ID prefix…",
+        key="seg_lookup_text",
+    )
+    if typed.strip():
+        filtered = [s for s in seg_ids if s.startswith(typed.strip())]
+        if filtered:
+            sel = st.selectbox(
+                "Matching segments",
+                options=filtered,
+                key="seg_lookup_sel",
+                label_visibility="collapsed",
+            )
+            desc = descriptions.get(sel, "")
+            st.caption(desc if desc else "No description available.")
+        else:
+            st.caption("No segments match that prefix.")
+    st.divider()
+
+
 # ── Aggregation ───────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def agg_cols_data(
@@ -607,24 +631,8 @@ if missing_cols:
 with st.sidebar:
     # ── Segment lookup ────────────────────────────────────────────────────
     _seg_ids = _all_segment_ids(df_raw)
-    _lookup_id = st.selectbox(
-        "🔍 Segment Lookup",
-        options=[""] + _seg_ids,
-        index=0,
-        key="seg_lookup",
-        help="Type to filter segment IDs",
-    )
-    if _lookup_id:
-        _desc = SEGMENT_DESCRIPTIONS.get(_lookup_id, "")
-        if _desc:
-            st.caption(_desc)
-        else:
-            st.caption("No description available for this segment.")
-    st.divider()
+    _seg_lookup_widget(_seg_ids, SEGMENT_DESCRIPTIONS)
 
-    st.header("Filters")
-
-    st.divider()
     st.subheader("Date range")
     _dates = pd.to_datetime(df_raw["start_date"], errors="coerce").dropna()
     _d_min = _dates.min().date()
@@ -684,25 +692,19 @@ df = preprocess(
     bal_clip_pct=float(bal_clip_pct),
 )
 
-# ── Communications selector (compact checkbox strip) ─────────────────────────
+# ── ordered_comms from session state (checkboxes live inside Table tab) ─────────
 _all_present_comms = [c for c in COMM_ORDER if c in df["Communication"].unique()]
-_cc = st.columns(len(_all_present_comms))
-selected_comms = [
-    c for i, c in enumerate(_all_present_comms)
-    if _cc[i].checkbox(c, value=True, key=f"cb_{c}")
-]
-ordered_comms = [c for c in COMM_ORDER if c in selected_comms]
+ordered_comms = [c for c in _all_present_comms if st.session_state.get(f"cb_{c}", True)]
 if not ordered_comms:
-    st.info("Select at least one communication above.")
-    st.stop()
+    ordered_comms = _all_present_comms[:]
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
 tab_table, tab_charts, tab_simulator, tab_export, tab_audit = st.tabs([
-    "📊  Table",
-    "📈  Charts",
-    "🎯  Targeting Simulator",
-    "⬇  Export",
-    "🔍  Audit",
+    "Table",
+    "Charts",
+    "Targeting Simulator",
+    "Export",
+    "Audit",
 ])
 
 
@@ -710,6 +712,14 @@ tab_table, tab_charts, tab_simulator, tab_export, tab_audit = st.tabs([
 # TABLE TAB
 # ══════════════════════════════════════════════════════════
 with tab_table:
+    # ── Communication toggle strip ──────────────────────────────────────────────
+    _cc = st.columns(len(_all_present_comms))
+    for _i, _c in enumerate(_all_present_comms):
+        _cc[_i].checkbox(_c, value=True, key=f"cb_{_c}")
+    ordered_comms = [c for c in _all_present_comms if st.session_state.get(f"cb_{c}", True)]
+    if not ordered_comms:
+        ordered_comms = _all_present_comms[:]
+
     with st.spinner("Computing..."):
         tbl = build_table(df, ordered_comms, all_mode, agg_thr, comm_thr, min_n, bal_baseline_min)
 
@@ -744,9 +754,10 @@ with tab_charts:
             "Error bars (where shown) are 95% confidence intervals — wider bars mean less certainty."
         )
         # ── Bar chart ────────────────────────────────────────────────────────
-        ctrl1, ctrl2 = st.columns([1, 3])
-        with ctrl1:
+        _bc1, _bc2 = st.columns(2)
+        with _bc1:
             top_n = st.slider("Top N segments", 5, min(150, len(tbl)), min(30, len(tbl)), key="chart_tn")
+        with _bc2:
             metric_opts = ([f"{c} Bal%"       for c in ordered_comms]
                            + [f"{c} Acct%"      for c in ordered_comms]
                            + [f"{c} Lift Bal"   for c in ordered_comms]
@@ -780,13 +791,11 @@ with tab_charts:
                 labels={"x": "Segment", "y": "Mean % change", "color": "%"},
                 title=f"Top {top_n} segments — {chosen}",
             )
-            fig_bar.update_layout(coloraxis_showscale=False, xaxis_tickangle=-45, height=420)
+            fig_bar.update_layout(coloraxis_showscale=False, xaxis_tickangle=-45, height=480)
             fig_bar.update_yaxes(ticksuffix="%")
-            with ctrl2:
-                st.plotly_chart(fig_bar, use_container_width=True)
+            st.plotly_chart(fig_bar, use_container_width=True)
         else:
-            with ctrl2:
-                st.info("Selected metric not available for current communication selection.")
+            st.info("Selected metric not available for current communication selection.")
 
         st.divider()
 
@@ -804,14 +813,17 @@ with tab_charts:
             hm.columns = [c.replace("_bal", "") for c in heat_cols]
             hm["_mean"] = hm.mean(axis=1)
             hm = hm.sort_values("_mean", ascending=False).head(50).drop(columns="_mean")
-            y_labels = [str(x) for x in hm.index]
+            hm.index = hm.index.astype(str)
             fig_hm = px.imshow(
-                hm.values * 100, x=list(hm.columns), y=y_labels,
+                hm * 100,
                 labels=dict(x="Communication", y="Segment", color="Bal% Δ"),
                 color_continuous_scale="RdYlGn", aspect="auto",
                 title="Balance % Δ — Top 50 segments",
+                text_auto=".1f",
             )
-            fig_hm.update_layout(height=700)
+            fig_hm.update_yaxes(type="category", autorange="reversed")
+            fig_hm.update_xaxes(type="category")
+            fig_hm.update_layout(height=max(420, len(hm) * 14 + 100))
             st.plotly_chart(fig_hm, use_container_width=True)
 
         st.divider()
