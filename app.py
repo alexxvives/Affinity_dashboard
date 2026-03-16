@@ -463,14 +463,20 @@ def style_tbl(
                 lv = sub_df.loc[idx, lv_c]
                 cv = sub_df.loc[idx, ci_c]
                 if pd.isna(lv):
-                    s = ""
+                    s_lv = ""
+                    s_ci = ""
                 elif pd.isna(cv):
-                    s = _rdylgn(lv)
+                    s_lv = _rdylgn(lv)
+                    s_ci = ""
                 else:
                     is_sig = (lv - cv) > 0 or (lv + cv) < 0
                     base   = _rdylgn(lv)
-                    s      = base if is_sig else base.replace("0.55", "0.20")
-                out.loc[idx, lv_c] = s
+                    s_lv   = base if is_sig else base.replace("0.55", "0.20")
+                    s_ci   = ("background-color: rgba(80,160,80,0.50); color:#111"
+                               if is_sig else
+                               "background-color: rgba(200,180,60,0.40); color:#111")
+                out.loc[idx, lv_c] = s_lv
+                out.loc[idx, ci_c] = s_ci
             return out
         return _f
     for lv_col, ci_col in lift_ci_map.items():
@@ -545,6 +551,16 @@ def style_tbl(
     }});
   }});
 }})();
+(function(){{
+  var tt=document.createElement('div');
+  tt.style.cssText='position:fixed;background:#1e2030;color:#eee;font-size:11px;padding:5px 9px;border-radius:4px;border:1px solid #555;z-index:99999;pointer-events:none;display:none;max-width:340px;word-wrap:break-word;line-height:1.5;white-space:normal;box-shadow:0 2px 8px rgba(0,0,0,.5);';
+  document.body.appendChild(tt);
+  document.querySelectorAll('[data-tip]').forEach(function(el){{
+    el.addEventListener('mouseenter',function(e){{tt.textContent=el.getAttribute('data-tip');tt.style.display='block';}});
+    el.addEventListener('mousemove', function(e){{tt.style.left=(e.clientX+14)+'px';tt.style.top=(e.clientY+14)+'px';}});
+    el.addEventListener('mouseleave',function(){{tt.style.display='none';}});
+  }});
+}})();
 </script></body></html>"""
 
 
@@ -590,7 +606,7 @@ def _styled_html_table(
             tip  = f"{lbl} \u2014 {desc}" if lbl and desc else (lbl or desc)
             if not tip:
                 return m.group(0)
-            return f'{tag_pre} title="{tip.replace(chr(34), chr(39))}">{cell_val}</th>'
+            return f'{tag_pre} data-tip="{tip.replace(chr(34), chr(39))}">{cell_val}</th>'
         html = _re2.sub(
             r'(<th[^>]*class="[^"]*row_heading[^"]*"[^>]*)>([^<]*)</th>',
             _tip, html,
@@ -611,6 +627,16 @@ def _styled_html_table(
   th.blank {{ background: #262730 !important; }}
 </style></head><body>
 <div style="overflow:auto; max-height:{height - 20}px;">{html}</div>
+<script>(function(){{
+  var tt=document.createElement('div');
+  tt.style.cssText='position:fixed;background:#1e2030;color:#eee;font-size:11px;padding:5px 9px;border-radius:4px;border:1px solid #555;z-index:99999;pointer-events:none;display:none;max-width:340px;word-wrap:break-word;line-height:1.5;white-space:normal;box-shadow:0 2px 8px rgba(0,0,0,.5);';
+  document.body.appendChild(tt);
+  document.querySelectorAll('[data-tip]').forEach(function(el){{
+    el.addEventListener('mouseenter',function(e){{tt.textContent=el.getAttribute('data-tip');tt.style.display='block';}});
+    el.addEventListener('mousemove', function(e){{tt.style.left=(e.clientX+14)+'px';tt.style.top=(e.clientY+14)+'px';}});
+    el.addEventListener('mouseleave',function(){{tt.style.display='none';}});
+  }});
+}})();</script>
 </body></html>"""
 
 
@@ -1012,6 +1038,10 @@ with tab_charts:
             has_ci = ci_col is not None and ci_col in tbl.columns
 
             x_labels = [str(x) for x in top_data.index]
+            _bar_hover = [
+                (SEGMENT_LABELS.get(x, "") + (" — " + SEGMENT_DESCRIPTIONS.get(x, "") if SEGMENT_DESCRIPTIONS.get(x) else ""))
+                for x in x_labels
+            ]
             fig_bar = px.bar(
                 x=x_labels,
                 y=top_data.values * 100,
@@ -1020,6 +1050,10 @@ with tab_charts:
                 color_continuous_scale="RdYlGn",
                 labels={"x": "Segment", "y": "Mean % change", "color": "%"},
                 title=f"Top {_TOP_N_CHART} segments — {chosen}",
+            )
+            fig_bar.update_traces(
+                customdata=_bar_hover,
+                hovertemplate="<b>%{x}</b>: %{y:.1f}%<br><span style='color:#aaa'>%{customdata}</span><extra></extra>",
             )
             fig_bar.update_layout(coloraxis_showscale=False, xaxis_tickangle=-45, height=480)
             fig_bar.update_xaxes(type="category")
@@ -1054,6 +1088,17 @@ with tab_charts:
                 color_continuous_scale="RdYlGn", aspect="auto",
                 title=f"{_hm_label} — Top 50 segments",
                 text_auto=".1f",
+            )
+            _hm_custom = np.empty(hm.shape, dtype=object)
+            for _ri, _sid in enumerate(hm.index):
+                _lbl  = SEGMENT_LABELS.get(str(_sid), "")
+                _desc = SEGMENT_DESCRIPTIONS.get(str(_sid), "")
+                _row_tip = (f"<b>{_sid}</b>" + (f"<br>{_lbl}" if _lbl else "") + (f"<br><i>{_desc}</i>" if _desc else ""))
+                for _ci in range(len(hm.columns)):
+                    _hm_custom[_ri, _ci] = _row_tip
+            fig_hm.update_traces(
+                customdata=_hm_custom,
+                hovertemplate="%{customdata}<br>Comm: %{x} → %{z:.1f}%<extra></extra>",
             )
             fig_hm.update_yaxes(type="category", autorange="reversed")
             fig_hm.update_xaxes(type="category")
@@ -1099,11 +1144,18 @@ with tab_charts:
                         })
             if jt_rows:
                 jt_df = pd.DataFrame(jt_rows).sort_values("_rank")
+                jt_df["_seg_tip"] = jt_df["Segment"].map(
+                    lambda s: (SEGMENT_LABELS.get(s, s) + (" \u2014 " + SEGMENT_DESCRIPTIONS.get(s, "") if SEGMENT_DESCRIPTIONS.get(s) else ""))
+                )
                 fig_jt = px.line(
                     jt_df, x="Communication", y=_jt_ylabel, color="Segment",
                     markers=True,
+                    custom_data=["Segment", "_seg_tip"],
                     category_orders={"Communication": ordered_comms},
                     title=f"{_jt_ylabel} across journey touchpoints",
+                )
+                fig_jt.update_traces(
+                    hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<br>%{x}: %{y:.1%}<extra></extra>"
                 )
                 fig_jt.update_yaxes(tickformat=".1%")
                 fig_jt.update_layout(height=450)
@@ -1368,8 +1420,6 @@ with tab_simulator:
             st.metric(
                 "Total unique users (all selected segments)",
                 f"{_sim_total_users:,}",
-                delta=f"Date: {date_from} → {date_to} | Min N = {min_n}",
-                delta_color="off",
             )
 
             # Show kpi metrics row
