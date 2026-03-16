@@ -17,6 +17,20 @@ except ImportError:
     SEGMENT_LABELS: Dict[str, str] = {}
     SEGMENT_DESCRIPTIONS: Dict[str, str] = {}
 
+# Load real segment data from segment_descriptions.csv (overrides generate_dummy_data values)
+try:
+    _sdesc_df = pd.read_csv("segment_descriptions.csv", dtype=str)
+    if {"nsegment", "label", "description"}.issubset(_sdesc_df.columns):
+        SEGMENT_LABELS = dict(zip(_sdesc_df["nsegment"], _sdesc_df["label"].fillna("")))
+        SEGMENT_DESCRIPTIONS = dict(zip(_sdesc_df["nsegment"], _sdesc_df["description"].fillna("")))
+        _SEGMENT_GROUPS: Dict[str, List[str]] = {}
+        for _, _srow in _sdesc_df.iterrows():
+            _SEGMENT_GROUPS.setdefault(_srow["label"], []).append(_srow["nsegment"])
+    else:
+        _SEGMENT_GROUPS: Dict[str, List[str]] = {}
+except FileNotFoundError:
+    _SEGMENT_GROUPS: Dict[str, List[str]] = {}
+
 # ── Config ────────────────────────────────────────────────────────────────────
 COMM_ORDER = ["day1", "day5", "day7", "day31", "day61", "day90", "day120"]
 REQUIRED_COLS = [
@@ -163,26 +177,23 @@ def _all_segment_ids(df_raw: pd.DataFrame) -> List[str]:
 
 
 @st.fragment
-def _seg_lookup_widget(seg_ids: List[str], descriptions: Dict[str, str]) -> None:
-    """Prefix-filtered segment lookup that reruns only itself, not the whole page."""
-    typed = st.text_input(
-        "🔍 Segment Lookup",
-        placeholder="Type ID prefix…",
-        key="seg_lookup_text",
+def _seg_lookup_widget(seg_ids: List[str], labels: Dict[str, str], descriptions: Dict[str, str]) -> None:
+    """Searchable segment lookup — Streamlit native search handles filtering as the user types."""
+    sel = st.selectbox(
+        "Segment lookup",
+        options=seg_ids,
+        index=None,
+        placeholder="Type segment ID or name…",
+        key="seg_lookup_sel",
+        format_func=lambda x: f"{x}  —  {labels.get(x, '')}",
     )
-    if typed.strip():
-        filtered = [s for s in seg_ids if s.startswith(typed.strip())]
-        if filtered:
-            sel = st.selectbox(
-                "Matching segments",
-                options=filtered,
-                key="seg_lookup_sel",
-                label_visibility="collapsed",
-            )
-            desc = descriptions.get(sel, "")
-            st.caption(desc if desc else "No description available.")
-        else:
-            st.caption("No segments match that prefix.")
+    if sel:
+        lbl  = labels.get(sel, "")
+        desc = descriptions.get(sel, "")
+        if lbl:
+            st.caption(f"**{lbl}** — {desc}" if desc else f"**{lbl}**")
+        elif desc:
+            st.caption(desc)
     st.divider()
 
 
@@ -341,6 +352,7 @@ def style_tbl(
     seg_desc: Optional[Dict[str, str]] = None,
     show_n_cols: bool = False,
     show_lift: bool = False,
+    show_metric: str = "both",
 ) -> str:
     """
     Return a full HTML document with:
@@ -396,6 +408,11 @@ def style_tbl(
     else:
         # drop per-comm lift columns (including lift CI); show raw % columns
         drop_cols += [v for k, v in rename.items() if ("_lift" in k) and v in disp.columns]
+    # Metric filter: hide balance or accounts columns based on show_metric
+    if show_metric == "balance":
+        drop_cols += [v for k, v in rename.items() if "_acct" in k and v in disp.columns]
+    elif show_metric == "accounts":
+        drop_cols += [v for k, v in rename.items() if "_bal" in k and v in disp.columns]
     disp = disp.drop(columns=[c for c in drop_cols if c in disp.columns])
 
     pct_cols = [v for k, v in rename.items()
@@ -403,7 +420,13 @@ def style_tbl(
                 and v in disp.columns]
     n_cols = [v for k, v in rename.items() if (k.endswith("_n") or k == "agg_n") and v in disp.columns]
 
-    fmt = {col: "{:.2%}" for col in pct_cols if col in disp.columns}
+    def _pct_fmt(v):
+        if pd.isna(v):
+            return ""
+        pct = v * 100
+        return f"{pct:.1f}%" if abs(pct) < 1.0 else f"{pct:.0f}%"
+
+    fmt = {col: _pct_fmt for col in pct_cols if col in disp.columns}
     fmt.update({col: "{:,.0f}" for col in n_cols if col in disp.columns})
 
     def _colour_col(col_series: pd.Series) -> pd.Series:
@@ -468,6 +491,8 @@ def style_tbl(
   thead th {{ background: #262730; color: #fafafa; padding: 6px 10px;
               text-align: left; position: sticky; top: 0; z-index: 2;
               border-bottom: 2px solid #555; white-space: nowrap; font-size: 11px; }}
+  thead th:not(.blank) {{ cursor: pointer; user-select: none; }}
+  thead th:not(.blank):hover {{ background: #3a3c4a; }}
   tbody td {{ padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; }}
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
@@ -476,7 +501,29 @@ def style_tbl(
 </style></head>
 <body><div style="overflow:auto; max-height: 615px;">
 {table_html}
-</div></body></html>"""
+</div><script>
+(function(){{
+  var ths = document.querySelectorAll('thead tr th:not(.blank)');
+  var dir = {{}};
+  ths.forEach(function(th, idx) {{
+    th.addEventListener('click', function() {{
+      var asc = !dir[idx]; dir[idx] = asc;
+      var tbody = document.querySelector('tbody');
+      var rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort(function(a, b) {{
+        var tds_a = a.querySelectorAll('td');
+        var tds_b = b.querySelectorAll('td');
+        var av = (tds_a[idx] || {{innerText:''}}).innerText.replace(/[%,\u20ac]/g,'').trim();
+        var bv = (tds_b[idx] || {{innerText:''}}).innerText.replace(/[%,\u20ac]/g,'').trim();
+        var an = parseFloat(av), bn = parseFloat(bv);
+        if (!isNaN(an) && !isNaN(bn)) return asc ? an-bn : bn-an;
+        return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+      }});
+      rows.forEach(function(r){{ tbody.appendChild(r); }});
+    }});
+  }});
+}})();
+</script></body></html>"""
 
 
 def _n_color(val: object) -> str:
@@ -631,7 +678,7 @@ if missing_cols:
 with st.sidebar:
     # ── Segment lookup ────────────────────────────────────────────────────
     _seg_ids = _all_segment_ids(df_raw)
-    _seg_lookup_widget(_seg_ids, SEGMENT_DESCRIPTIONS)
+    _seg_lookup_widget(_seg_ids, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS)
 
     st.subheader("Date range")
     _dates = pd.to_datetime(df_raw["start_date"], errors="coerce").dropna()
@@ -647,7 +694,7 @@ with st.sidebar:
     st.subheader("Display")
     show_n_cols = st.checkbox("Show N (sample size) columns", value=False)
     show_lift   = st.checkbox("Show lift vs control (replaces raw %)", value=False)
-    min_n       = st.slider("Hide cells with fewer than N users", 0, 100, 3, step=1,
+    min_n       = st.slider("Hide cells with fewer than N users", 0, 100, 25, step=1,
                             help="Cells with fewer unique contacted users are shown as blank.")
 
     st.divider()
@@ -657,10 +704,7 @@ with st.sidebar:
             value=False,
             help="When ON, a customer is only counted if they appear in every selected communication step.",
         )
-        st.caption("Raise these to focus only on customers who showed improvement. Leave at −100% for unbiased results.")
-        agg_b_raw = st.slider("Min. balance % change", -100, 200, -100, key="k_ab")
-        agg_a_raw = st.slider("Min. accounts % change", -100, 200, -100, key="k_aa")
-        agg_thr = (agg_b_raw / 100.0, agg_a_raw / 100.0)
+        agg_thr = (-1.0, -1.0)
         comm_thr: Dict[str, Tuple[float, float]] = {c: agg_thr for c in COMM_ORDER}
         st.markdown("---")
         bal_clip_pct = st.slider(
@@ -699,13 +743,50 @@ if not ordered_comms:
     ordered_comms = _all_present_comms[:]
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_table, tab_charts, tab_simulator, tab_export, tab_audit = st.tabs([
+tab_explorer, tab_table, tab_charts, tab_simulator, tab_export, tab_audit = st.tabs([
+    "Segment Explorer",
     "Table",
     "Charts",
     "Targeting Simulator",
     "Export",
     "Audit",
 ])
+
+
+# ══════════════════════════════════════════════════════════
+# SEGMENT EXPLORER TAB
+# ══════════════════════════════════════════════════════════
+with tab_explorer:
+    st.subheader("Segment catalogue")
+    st.caption("All segments grouped by category. User and contact counts reflect the currently filtered date range.")
+    if not SEGMENT_LABELS:
+        st.info("No segment descriptions found. Ensure segment_descriptions.csv is present in the app directory.")
+    else:
+        _seg_stats = (
+            df.groupby("nsegment")
+            .agg(
+                Unique_Users=("alpha_key", "nunique"),
+                Contacts=("Contact_flag", "sum"),
+            )
+            .reset_index()
+            .rename(columns={"nsegment": "Segment ID", "Unique_Users": "Unique Users"})
+        )
+        _seg_stats["Label"] = _seg_stats["Segment ID"].map(SEGMENT_LABELS).fillna("—")
+        _seg_stats["Description"] = _seg_stats["Segment ID"].map(SEGMENT_DESCRIPTIONS).fillna("—")
+        _seg_stats = (
+            _seg_stats[["Segment ID", "Label", "Description", "Unique Users", "Contacts"]]
+            .sort_values(["Label", "Segment ID"])
+            .reset_index(drop=True)
+        )
+        _all_groups = sorted(_seg_stats["Label"].unique().tolist())
+        _xcol1, _xcol2 = st.columns([3, 1])
+        with _xcol1:
+            _sel_groups = st.multiselect(
+                "Filter by group", _all_groups, default=_all_groups, key="explorer_groups"
+            )
+        _filtered_stats = _seg_stats[_seg_stats["Label"].isin(_sel_groups)]
+        st.dataframe(_filtered_stats, use_container_width=True, hide_index=True)
+        st.caption(f"Showing {len(_filtered_stats):,} of {len(_seg_stats):,} segments across {len(_sel_groups)} group(s).")
 
 
 # ══════════════════════════════════════════════════════════
@@ -720,6 +801,18 @@ with tab_table:
     if not ordered_comms:
         ordered_comms = _all_present_comms[:]
 
+    show_metric = st.radio(
+        "Show columns",
+        ["Balance & Accounts", "Balance only", "Accounts only"],
+        horizontal=True,
+        key="show_metric_radio",
+    )
+    _show_metric_val = {
+        "Balance & Accounts": "both",
+        "Balance only": "balance",
+        "Accounts only": "accounts",
+    }[show_metric]
+
     with st.spinner("Computing..."):
         tbl = build_table(df, ordered_comms, all_mode, agg_thr, comm_thr, min_n, bal_baseline_min)
 
@@ -730,8 +823,13 @@ with tab_table:
             tbl, ordered_comms,
             show_n_cols=show_n_cols,
             show_lift=show_lift,
+            show_metric=_show_metric_val,
         )
         components.html(html_tbl, height=680, scrolling=True)
+        st.caption(
+            "All % changes are measured over the 7-day window between start_date and end_date. "
+            "Click any column header to sort."
+        )
         if show_lift:
             st.caption(
                 "🟢 **Strong color** = lift 95% CI does not cross zero (statistically significant).  "
@@ -909,16 +1007,18 @@ with tab_charts:
             diag[diag == 0] = 1
             cooc_norm = cooc_matrix.values / diag[:, None]
         cooc_norm_df = pd.DataFrame(cooc_norm, index=cooc_segs, columns=cooc_segs)
-        y_lbl = list(cooc_segs)
+        cooc_norm_df.index   = [str(s) for s in cooc_segs]
+        cooc_norm_df.columns = [str(s) for s in cooc_segs]
         fig_cooc = px.imshow(
-            cooc_norm_df.values,
-            x=y_lbl, y=y_lbl,
+            cooc_norm_df,
             color_continuous_scale="Blues",
             zmin=0, zmax=1,
             labels=dict(color="Share of row-seg users"),
             title="Segment co-occurrence (row = % of row-segment users who also belong to col-segment)",
             aspect="auto",
         )
+        fig_cooc.update_xaxes(type="category")
+        fig_cooc.update_yaxes(type="category")
         fig_cooc.update_layout(height=600)
         st.plotly_chart(fig_cooc, use_container_width=True)
         st.caption(
@@ -1055,43 +1155,68 @@ with tab_simulator:
         _y_label     = "Expected Balance Lift %" if sim_metric == "Balance % lift" else "Expected Accounts Lift %"
 
         if sim_segs:
-            # ── Summary bar: N-weighted avg lift per communication ────────────
+            # ── Pre-filter table rows and compute projected metrics ───────────
+            sub_all = tbl.loc[tbl.index.isin(sim_segs)].copy()
+            _sim_total_users = df[
+                (df["Contact_flag"] == 1) & (df["nsegment"].isin(sim_segs))
+            ]["alpha_key"].nunique()
+
+            def _w_avg(col, n_vals):
+                if col not in sub_all.columns:
+                    return np.nan
+                valid = sub_all[col].notna()
+                tot = n_vals[valid].sum()
+                return float((sub_all.loc[valid, col] * n_vals[valid]).sum() / tot) if tot > 0 else np.nan
+
+            def _safe_proj(n, avg, lift):
+                if pd.isna(avg) or pd.isna(lift) or n == 0:
+                    return np.nan
+                return n * float(avg) * float(lift)
+
             sim_summary_rows = []
             for comm in ordered_comms:
-                lift_col = f"{comm}{_lift_suffix}"
-                raw_col  = f"{comm}{_raw_suffix}"
-                n_col    = f"{comm}_n"
+                n_col = f"{comm}_n"
                 if n_col not in tbl.columns:
                     continue
-                sub = tbl.loc[tbl.index.isin(sim_segs), [c for c in [lift_col, raw_col, n_col] if c in tbl.columns]].copy()
-                n_vals = sub[n_col].fillna(0)
+                n_vals  = sub_all[n_col].fillna(0) if n_col in sub_all.columns else pd.Series(dtype=float)
                 total_n = int(n_vals.sum())
 
-                # Weighted lift (prefer lift if available, fall back to raw treatment avg)
-                if lift_col in sub.columns:
-                    valid = sub[lift_col].notna()
-                    w_lift = float((sub.loc[valid, lift_col] * n_vals[valid]).sum() / n_vals[valid].sum()) if n_vals[valid].sum() > 0 else np.nan
-                else:
-                    w_lift = np.nan
+                w_lift_bal  = _w_avg(f"{comm}_lift_bal",  n_vals)
+                w_lift_acct = _w_avg(f"{comm}_lift_acct", n_vals)
+                w_raw_bal   = _w_avg(f"{comm}_bal",       n_vals)
+                w_raw_acct  = _w_avg(f"{comm}_acct",      n_vals)
+                w_lift = w_lift_bal  if sim_metric == "Balance % lift" else w_lift_acct
+                w_raw  = w_raw_bal   if sim_metric == "Balance % lift" else w_raw_acct
 
-                if raw_col in sub.columns:
-                    valid_r = sub[raw_col].notna()
-                    w_raw = float((sub.loc[valid_r, raw_col] * n_vals[valid_r]).sum() / n_vals[valid_r].sum()) if n_vals[valid_r].sum() > 0 else np.nan
-                else:
-                    w_raw = np.nan
+                _comm_df  = df[
+                    (df["Contact_flag"] == 1)
+                    & (df["Communication"] == comm)
+                    & (df["nsegment"].isin(sim_segs))
+                ]
+                _per_user = _comm_df.groupby("alpha_key")[["start_balance", "start_accounts"]].first()
+                _comm_n_u = len(_per_user)
+                _avg_sb   = _per_user["start_balance"].mean()  if not _per_user.empty else np.nan
+                _avg_sa   = _per_user["start_accounts"].mean() if not _per_user.empty else np.nan
+                proj_eur   = _safe_proj(_comm_n_u, _avg_sb,  w_lift_bal)
+                proj_accts = _safe_proj(_comm_n_u, _avg_sa, w_lift_acct)
 
                 sim_summary_rows.append({
-                    "Communication":  comm,
-                    "Expected Lift":  w_lift,
-                    "Treatment Avg":  w_raw,
-                    "Total N":        total_n,
-                    "_rank":          _rank(comm),
+                    "Communication":   comm,
+                    "Expected Lift":   w_lift,
+                    "Treatment Avg":   w_raw,
+                    "Total N":         total_n,
+                    "Comm Users":      _comm_n_u,
+                    "Projected Bal \u20ac": proj_eur,
+                    "Proj. Accounts":  proj_accts,
+                    "_rank":           _rank(comm),
                 })
 
             sim_summary = (pd.DataFrame(sim_summary_rows)
                            .sort_values("_rank")
                            .drop(columns="_rank")
                            .reset_index(drop=True))
+
+            st.metric("Total unique users (all selected segments)", f"{_sim_total_users:,}")
 
             # Show kpi metrics row
             st.markdown("#### Expected lift across selected segments")
@@ -1105,6 +1230,30 @@ with tab_simulator:
                     kpi_cols[i].metric(label, f"{lift_val:.2%}", delta_str)
                 else:
                     kpi_cols[i].metric(label, "—", delta_str)
+
+            # Projected absolute balance increase row
+            if sim_summary["Projected Bal \u20ac"].notna().any():
+                st.markdown("#### Projected absolute balance increase")
+                proj_b_cols = st.columns(len(sim_summary))
+                for i, row in sim_summary.iterrows():
+                    pv = row["Projected Bal \u20ac"]
+                    nu = int(row["Comm Users"]) if pd.notna(row.get("Comm Users")) else 0
+                    proj_b_cols[i].metric(
+                        row["Communication"],
+                        f"\u20ac{pv:,.0f}" if pd.notna(pv) else "—",
+                        f"{nu:,} users",
+                    )
+
+            # Projected account openings row
+            if sim_summary["Proj. Accounts"].notna().any():
+                st.markdown("#### Projected account openings")
+                proj_a_cols = st.columns(len(sim_summary))
+                for i, row in sim_summary.iterrows():
+                    av = row["Proj. Accounts"]
+                    proj_a_cols[i].metric(
+                        row["Communication"],
+                        f"{av:,.0f}" if pd.notna(av) else "—",
+                    )
 
             st.divider()
 
