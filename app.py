@@ -482,6 +482,25 @@ def style_tbl(
 
     table_html = styler.to_html()
 
+    # Inject description tooltips on row-index cells
+    if seg_labels or seg_desc:
+        import re as _re
+        def _inject_tooltip(m):
+            tag_pre = m.group(1)
+            cell_val = m.group(2)
+            _id  = cell_val.strip()
+            lbl  = (seg_labels or {}).get(_id, "")
+            desc = (seg_desc   or {}).get(_id, "")
+            tip  = f"{lbl} — {desc}" if lbl and desc else (lbl or desc)
+            if not tip:
+                return m.group(0)
+            safe = tip.replace('"', "'")
+            return f'{tag_pre} title="{safe}">{cell_val}</th>'
+        table_html = _re.sub(
+            r'(<th[^>]*class="[^"]*row_heading[^"]*"[^>]*)>([^<]*)</th>',
+            _inject_tooltip, table_html,
+        )
+
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
   * {{ box-sizing: border-box; }}
@@ -692,24 +711,17 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Display")
-    show_n_cols = st.checkbox("Show N (sample size) columns", value=False)
-    show_lift   = st.checkbox("Show lift vs control (replaces raw %)", value=False)
-    # ── min_n with +/−1 and +/−10 buttons ───────────────────────────────────
+    # ── min_n: slider + −1/+1 flanking buttons ───────────────────────────────
     if "min_n_val" not in st.session_state:
         st.session_state["min_n_val"] = 25
-    _mn_label = st.empty()
-    _mn_label.markdown(f"**Hide cells with fewer than {st.session_state['min_n_val']} users**")
-    _btn1, _btn2, _btn3, _btn4, _btn5 = st.columns(5)
-    if _btn1.button("-10", key="mn_m10"):
-        st.session_state["min_n_val"] = max(0, st.session_state["min_n_val"] - 10)
-    if _btn2.button("-1",  key="mn_m1"):
+    st.caption("Hide cells with fewer than N users")
+    _mn_c1, _mn_c2, _mn_c3 = st.columns([1, 10, 1])
+    if _mn_c1.button("−", key="mn_m1"):
         st.session_state["min_n_val"] = max(0, st.session_state["min_n_val"] - 1)
-    if _btn4.button("+1",  key="mn_p1"):
+    if _mn_c3.button("+", key="mn_p1"):
         st.session_state["min_n_val"] = min(200, st.session_state["min_n_val"] + 1)
-    if _btn5.button("+10", key="mn_p10"):
-        st.session_state["min_n_val"] = min(200, st.session_state["min_n_val"] + 10)
-    _mn_label.markdown(f"**Hide cells with fewer than {st.session_state['min_n_val']} users**")
-    min_n = st.session_state["min_n_val"]
+    with _mn_c2:
+        min_n = st.slider("N", 0, 200, key="min_n_val", label_visibility="collapsed")
 
     st.divider()
     with st.expander("⚙️ Advanced filters", expanded=False):
@@ -772,121 +784,107 @@ tab_explorer, tab_table, tab_charts, tab_simulator, tab_export, tab_audit = st.t
 # ══════════════════════════════════════════════════════════
 with tab_explorer:
     st.subheader("Segment catalogue")
-    st.caption("All segments grouped by category. User and contact counts reflect the currently filtered date range.")
+    st.caption("Browse all segments by category. Unique Users = contacted users in the active date range.")
     if not SEGMENT_LABELS:
         st.info("No segment descriptions found. Ensure segment_descriptions.csv is present in the app directory.")
     else:
-        _seg_stats = (
+        # ── Build base table from CSV (all segments defined) ──────────────────
+        _exp_base = pd.DataFrame({
+            "Segment ID": list(SEGMENT_LABELS.keys()),
+            "Group":      list(SEGMENT_LABELS.values()),
+            "Description": [SEGMENT_DESCRIPTIONS.get(k, "") for k in SEGMENT_LABELS],
+        })
+        _user_counts = (
             df[df["Contact_flag"] == 1]
-            .groupby("nsegment")
-            .agg(Unique_Users=("alpha_key", "nunique"))
+            .groupby("nsegment")["alpha_key"]
+            .nunique()
+            .rename("Unique Users")
             .reset_index()
-            .rename(columns={"nsegment": "Segment ID", "Unique_Users": "Unique Users"})
+            .rename(columns={"nsegment": "Segment ID"})
         )
-        _seg_stats["Label"] = _seg_stats["Segment ID"].map(SEGMENT_LABELS).fillna("—")
-        _seg_stats["Description"] = _seg_stats["Segment ID"].map(SEGMENT_DESCRIPTIONS).fillna("—")
+        _exp_base = _exp_base.merge(_user_counts, on="Segment ID", how="left")
+        _exp_base["Unique Users"] = _exp_base["Unique Users"].fillna(0).astype(int)
+        _exp_base = _exp_base.sort_values(["Group", "Segment ID"]).reset_index(drop=True)
 
-        # Avg balance % change per segment (contacted users)
-        _bal_avg = (
-            df[df["Contact_flag"] == 1]
-            .groupby("nsegment")["balance_pct_change"]
-            .mean()
-            .rename("Avg Bal% Δ")
+        # ── Group filter ────────────────────────────────────────────────────────
+        _all_groups = sorted(_exp_base["Group"].unique().tolist())
+        _sel_groups = st.multiselect(
+            "Filter by group", _all_groups, default=_all_groups, key="explorer_groups"
         )
-        _acct_avg = (
-            df[df["Contact_flag"] == 1]
-            .groupby("nsegment")["accounts_pct_change"]
-            .mean()
-            .rename("Avg Acct% Δ")
-        )
-        _seg_stats = _seg_stats.merge(_bal_avg, left_on="Segment ID", right_index=True, how="left")
-        _seg_stats = _seg_stats.merge(_acct_avg, left_on="Segment ID", right_index=True, how="left")
-        _seg_stats = (
-            _seg_stats[["Segment ID", "Label", "Description", "Unique Users", "Avg Bal% Δ", "Avg Acct% Δ"]]
-            .sort_values(["Label", "Segment ID"])
-            .reset_index(drop=True)
-        )
+        _filtered_exp = _exp_base[_exp_base["Group"].isin(_sel_groups)].copy()
 
-        _all_groups = sorted(_seg_stats["Label"].unique().tolist())
-        _xc1, _xc2, _xc3 = st.columns([3, 1, 1])
-        with _xc1:
-            _sel_groups = st.multiselect(
-                "Filter by group", _all_groups, default=_all_groups, key="explorer_groups"
-            )
-        with _xc3:
-            _exp_metric = st.radio("Sort metric", ["Avg Bal% Δ", "Avg Acct% Δ"], horizontal=True, key="exp_metric")
-        _filtered_stats = _seg_stats[_seg_stats["Label"].isin(_sel_groups)].copy()
+        # ── Full segment table (always visible) ────────────────────────────────
+        st.dataframe(_filtered_exp, use_container_width=True, hide_index=True)
+        st.caption(f"{len(_filtered_exp):,} segments — {len(_sel_groups)} group(s) selected.")
 
-        # ── Group-level summary bar chart ────────────────────────────────────
-        _group_summary = (
-            _filtered_stats.groupby("Label")[["Avg Bal% Δ", "Avg Acct% Δ", "Unique Users"]]
-            .agg({"Avg Bal% Δ": "mean", "Avg Acct% Δ": "mean", "Unique Users": "sum"})
+        st.divider()
+
+        # ── Group size chart ───────────────────────────────────────────────────────
+        _grp_sz = (
+            _filtered_exp.groupby("Group")
+            .agg(Segments=("Segment ID", "count"), Users=("Unique Users", "sum"))
             .reset_index()
-            .sort_values(_exp_metric, ascending=False)
+            .sort_values("Users", ascending=False)
         )
-        if not _group_summary.empty:
-            _fig_grp = px.bar(
-                _group_summary,
-                x="Label", y=_exp_metric,
-                color=_exp_metric, color_continuous_scale="RdYlGn",
-                text=_group_summary[_exp_metric].map(lambda v: f"{v*100:.1f}%" if pd.notna(v) else ""),
-                hover_data=["Unique Users"],
-                title=f"Segment groups — {_exp_metric} (avg across segments in group)",
-                labels={"Label": "Group", _exp_metric: _exp_metric},
+        _ec1, _ec2 = st.columns(2)
+        with _ec1:
+            _fig_gsz = px.bar(
+                _grp_sz, x="Group", y="Segments",
+                color="Segments", color_continuous_scale="Blues",
+                text="Segments",
+                title="Segments per group",
             )
-            _fig_grp.update_traces(textposition="outside")
-            _fig_grp.update_yaxes(tickformat=".1%")
-            _fig_grp.update_layout(coloraxis_showscale=False, height=340, xaxis_tickangle=-20)
-            st.plotly_chart(_fig_grp, use_container_width=True)
-
-        # ── Top segments within selected groups ──────────────────────────────
-        _top_segs_exp = _filtered_stats.sort_values(_exp_metric, ascending=False).head(20)
-        if not _top_segs_exp.empty:
-            _fig_top = px.bar(
-                _top_segs_exp,
-                x="Segment ID", y=_exp_metric,
-                color=_exp_metric, color_continuous_scale="RdYlGn",
-                hover_data=["Label", "Description", "Unique Users"],
-                title=f"Top 20 segments — {_exp_metric}",
-                labels={"Segment ID": "Segment", _exp_metric: _exp_metric},
+            _fig_gsz.update_xaxes(tickangle=-30)
+            _fig_gsz.update_traces(textposition="outside")
+            _fig_gsz.update_layout(coloraxis_showscale=False, height=360)
+            st.plotly_chart(_fig_gsz, use_container_width=True)
+        with _ec2:
+            _fig_gus = px.bar(
+                _grp_sz, x="Group", y="Users",
+                color="Users", color_continuous_scale="Teal",
+                text=_grp_sz["Users"].map(lambda v: f"{v:,}"),
+                title="Unique users per group (active date range)",
             )
-            _fig_top.update_xaxes(type="category", tickangle=-45)
-            _fig_top.update_yaxes(tickformat=".1%")
-            _fig_top.update_layout(coloraxis_showscale=False, height=360)
-            st.plotly_chart(_fig_top, use_container_width=True)
-
-        # ── Full table ───────────────────────────────────────────────────────
-        with st.expander("Full segment table", expanded=False):
-            _disp = _filtered_stats.copy()
-            _disp["Avg Bal% Δ"] = _disp["Avg Bal% Δ"].map(lambda v: f"{v*100:.1f}%" if pd.notna(v) else "")
-            _disp["Avg Acct% Δ"] = _disp["Avg Acct% Δ"].map(lambda v: f"{v*100:.1f}%" if pd.notna(v) else "")
-            st.dataframe(_disp, use_container_width=True, hide_index=True)
-        st.caption(f"Showing {len(_filtered_stats):,} of {len(_seg_stats):,} segments across {len(_sel_groups)} group(s).")
+            _fig_gus.update_xaxes(tickangle=-30)
+            _fig_gus.update_traces(textposition="outside")
+            _fig_gus.update_layout(coloraxis_showscale=False, height=360)
+            st.plotly_chart(_fig_gus, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════
 # TABLE TAB
 # ══════════════════════════════════════════════════════════
 with tab_table:
-    # ── Communication toggle strip ──────────────────────────────────────────────
-    _cc = st.columns(len(_all_present_comms))
+    # ── Row 1: comm toggle strip + show lift at right ─────────────────────────
+    _n_pc = len(_all_present_comms)
+    _row1 = st.columns(_n_pc + 1)
     for _i, _c in enumerate(_all_present_comms):
-        _cc[_i].checkbox(_c, value=True, key=f"cb_{_c}")
+        _row1[_i].checkbox(_c, value=True, key=f"cb_{_c}")
+    show_lift = _row1[_n_pc].checkbox("Show lift vs control", value=False, key="tbl_show_lift")
     ordered_comms = [c for c in _all_present_comms if st.session_state.get(f"cb_{c}", True)]
     if not ordered_comms:
         ordered_comms = _all_present_comms[:]
 
-    show_metric = st.radio(
-        "Show columns",
-        ["Balance & Accounts", "Balance only", "Accounts only"],
-        horizontal=True,
-        key="show_metric_radio",
-    )
-    _show_metric_val = {
-        "Balance & Accounts": "both",
-        "Balance only": "balance",
-        "Accounts only": "accounts",
-    }[show_metric]
+    # ── Row 2: show columns multiselect + sample size ─────────────────────────
+    _row2_c1, _row2_c2 = st.columns([6, 2])
+    with _row2_c1:
+        _metric_sel = st.multiselect(
+            "Show columns",
+            ["Balance", "Accounts"],
+            default=["Balance", "Accounts"],
+            key="show_metric_ms",
+        )
+    with _row2_c2:
+        show_n_cols = st.checkbox("Show sample size", value=False, key="tbl_show_n")
+    _sel = _metric_sel or ["Balance", "Accounts"]
+    _show_bal  = "Balance"  in _sel
+    _show_acct = "Accounts" in _sel
+    if _show_bal and not _show_acct:
+        _show_metric_val = "balance"
+    elif _show_acct and not _show_bal:
+        _show_metric_val = "accounts"
+    else:
+        _show_metric_val = "both"
 
     with st.spinner("Computing..."):
         tbl = build_table(df, ordered_comms, all_mode, agg_thr, comm_thr, min_n, bal_baseline_min)
@@ -896,6 +894,8 @@ with tab_table:
     else:
         html_tbl = style_tbl(
             tbl, ordered_comms,
+            seg_labels=SEGMENT_LABELS,
+            seg_desc=SEGMENT_DESCRIPTIONS,
             show_n_cols=show_n_cols,
             show_lift=show_lift,
             show_metric=_show_metric_val,
@@ -903,7 +903,8 @@ with tab_table:
         components.html(html_tbl, height=680, scrolling=True)
         st.caption(
             "All % changes are measured over the 7-day window between start_date and end_date. "
-            "Click any column header to sort."
+            "Click any column header to sort. "
+            "Hover over a segment ID for its description."
         )
         if show_lift:
             st.caption(
@@ -1305,7 +1306,12 @@ with tab_simulator:
                            .drop(columns="_rank")
                            .reset_index(drop=True))
 
-            st.metric("Total unique users (all selected segments)", f"{_sim_total_users:,}")
+            st.metric(
+                "Total unique users (all selected segments)",
+                f"{_sim_total_users:,}",
+                delta=f"Date: {date_from} → {date_to} | Min N = {min_n}",
+                delta_color="off",
+            )
 
             # Show kpi metrics row
             st.markdown("#### Expected lift across selected segments")
@@ -1321,28 +1327,26 @@ with tab_simulator:
                     kpi_cols[i].metric(label, "—", delta_str)
 
             # Projected absolute balance increase row
-            if sim_summary["Projected Bal \u20ac"].notna().any():
-                st.markdown("#### Projected absolute balance increase")
-                proj_b_cols = st.columns(len(sim_summary))
-                for i, row in sim_summary.iterrows():
-                    pv = row["Projected Bal \u20ac"]
-                    nu = int(row["Comm Users"]) if pd.notna(row.get("Comm Users")) else 0
-                    proj_b_cols[i].metric(
-                        row["Communication"],
-                        f"\u20ac{pv:,.0f}" if pd.notna(pv) else "—",
-                        f"{nu:,} users",
-                    )
+            st.markdown("#### Projected absolute balance increase")
+            proj_b_cols = st.columns(len(sim_summary))
+            for i, row in sim_summary.iterrows():
+                pv = row["Projected Bal \u20ac"]
+                nu = int(row["Comm Users"]) if pd.notna(row.get("Comm Users")) else 0
+                proj_b_cols[i].metric(
+                    row["Communication"],
+                    f"\u20ac{pv:,.0f}" if pd.notna(pv) else "—",
+                    f"{nu:,} users",
+                )
 
             # Projected account openings row
-            if sim_summary["Proj. Accounts"].notna().any():
-                st.markdown("#### Projected account openings")
-                proj_a_cols = st.columns(len(sim_summary))
-                for i, row in sim_summary.iterrows():
-                    av = row["Proj. Accounts"]
-                    proj_a_cols[i].metric(
-                        row["Communication"],
-                        f"{av:,.0f}" if pd.notna(av) else "—",
-                    )
+            st.markdown("#### Projected account openings")
+            proj_a_cols = st.columns(len(sim_summary))
+            for i, row in sim_summary.iterrows():
+                av = row["Proj. Accounts"]
+                proj_a_cols[i].metric(
+                    row["Communication"],
+                    f"{av:,.0f}" if pd.notna(av) else "—",
+                )
 
             st.divider()
 
