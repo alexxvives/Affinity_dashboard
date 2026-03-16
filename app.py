@@ -81,8 +81,11 @@ def preprocess(df_raw: pd.DataFrame, date_min: Optional[str], date_max: Optional
     df["end_date"]   = pd.to_datetime(df["end_date"],   errors="coerce")
     df["Communication"] = df["Communication"].astype(str).str.strip()
     df["Contact_flag"]  = pd.to_numeric(df["Contact_flag"], errors="coerce").fillna(0).astype(int)
-    # control_flag is complement of Contact_flag
-    df["control_flag"] = 1 - df["Contact_flag"]
+    # Use explicit control_flag column from data if present; otherwise infer from Contact_flag
+    if "control_flag" in df.columns:
+        df["control_flag"] = pd.to_numeric(df["control_flag"], errors="coerce").fillna(0).astype(int)
+    else:
+        df["control_flag"] = (df["Contact_flag"] == 0).astype(int)
     for col in ["start_balance", "end_balance", "start_accounts", "end_accounts"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -568,6 +571,49 @@ def _n_color(val: object) -> str:
         return ""
 
 
+def _styled_html_table(
+    styler,
+    seg_labels: Optional[Dict[str, str]] = None,
+    seg_desc: Optional[Dict[str, str]] = None,
+    height: int = 400,
+) -> str:
+    """Convert a Pandas Styler to a themed HTML doc with segment-ID hover tooltips."""
+    import re as _re2
+    html = styler.to_html()
+    if seg_labels or seg_desc:
+        def _tip(m):
+            tag_pre  = m.group(1)
+            cell_val = m.group(2)
+            _id  = cell_val.strip()
+            lbl  = (seg_labels or {}).get(_id, "")
+            desc = (seg_desc   or {}).get(_id, "")
+            tip  = f"{lbl} \u2014 {desc}" if lbl and desc else (lbl or desc)
+            if not tip:
+                return m.group(0)
+            return f'{tag_pre} title="{tip.replace(chr(34), chr(39))}">{cell_val}</th>'
+        html = _re2.sub(
+            r'(<th[^>]*class="[^"]*row_heading[^"]*"[^>]*)>([^<]*)</th>',
+            _tip, html,
+        )
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+  * {{ box-sizing: border-box; }}
+  body {{ font-family: -apple-system, BlinkMacSystemFont, sans-serif;
+          font-size: 12px; background: transparent; color: #fafafa; margin: 0; padding: 4px; }}
+  table {{ border-collapse: collapse; width: 100%; }}
+  thead th {{ background: #262730; color: #fafafa; padding: 6px 10px;
+              text-align: left; position: sticky; top: 0; z-index: 2;
+              border-bottom: 2px solid #555; white-space: nowrap; font-size: 11px; }}
+  tbody td {{ padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; }}
+  tbody tr:hover td {{ outline: 1px solid #666; }}
+  th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
+                    color: #ccc !important; font-weight: normal; cursor: help; }}
+  th.blank {{ background: #262730 !important; }}
+</style></head><body>
+<div style="overflow:auto; max-height:{height - 20}px;">{html}</div>
+</body></html>"""
+
+
 # ── Excel export ──────────────────────────────────────────────────────────────
 def build_excel(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
     buf = io.BytesIO()
@@ -711,13 +757,13 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Display")
-    # Square CSS for the flanking ±1 buttons
+    # Square compact CSS for the flanking ±1 buttons
     st.markdown("""
     <style>
     section[data-testid="stSidebar"] .stButton button {
-        min-width: 2.2rem !important; max-width: 2.2rem !important;
-        height: 2.2rem !important; padding: 0 !important;
-        font-size: 1rem !important; line-height: 1 !important;
+        min-width: 1.3rem !important; max-width: 1.3rem !important;
+        height: 1.3rem !important; padding: 0 !important;
+        font-size: 0.7rem !important; line-height: 1 !important;
     }
     </style>
     """, unsafe_allow_html=True)
@@ -1367,16 +1413,20 @@ with tab_simulator:
 
             # ── Per-segment detail table ──────────────────────────────────────
             st.markdown("#### Per-segment breakdown")
-            st.caption(
-                "Each cell shows the lift (treatment − control) for that segment × communication. "
-                "Blank = no control data for that combination or fewer users than the minimum N filter."
+            _c_sim_cap, _c_sim_tog = st.columns([6, 2])
+            _c_sim_cap.caption(
+                "Each cell shows the lift (treatment \u2212 control) for that segment \u00d7 communication. "
+                "Blank = no control data or fewer users than the minimum N filter. "
+                "Hover a segment ID for its description."
             )
-            # Interleave lift + N columns: day1, day1 N, day5, day5 N, ...
+            _show_sim_n = _c_sim_tog.toggle("Show sample size", value=False, key="sim_show_n")
+
+            # Build columns: lift only, or interleaved lift + N
             _intl_cols = []
             for c in ordered_comms:
                 if f"{c}{_lift_suffix}" in tbl.columns:
                     _intl_cols.append(f"{c}{_lift_suffix}")
-                if f"{c}_n" in tbl.columns:
+                if _show_sim_n and f"{c}_n" in tbl.columns:
                     _intl_cols.append(f"{c}_n")
             detail = tbl.loc[tbl.index.isin(sim_segs), [c for c in _intl_cols if c in tbl.columns]].copy()
             detail.index.name = "Segment"
@@ -1407,7 +1457,11 @@ with tab_simulator:
                 styler_sim = styler_sim.apply(_lift_color, subset=lift_disp_cols, axis=0)
             if n_disp_cols:
                 styler_sim = styler_sim.apply(_n_color_sim, subset=n_disp_cols, axis=0)
-            st.dataframe(styler_sim, use_container_width=True)
+            _sim_h = max(300, min(600, 60 + len(detail) * 30))
+            components.html(
+                _styled_html_table(styler_sim, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_sim_h),
+                height=_sim_h, scrolling=True,
+            )
         else:
             st.info("Select at least one segment above to run the simulation.")
 
