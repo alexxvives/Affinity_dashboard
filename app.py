@@ -901,8 +901,18 @@ with tab_explorer:
         _filtered_exp = _exp_base[_exp_base["Group"].isin(_sel_groups)].copy()
 
         # ── Full segment table (always visible) ────────────────────────────────
-        st.dataframe(_filtered_exp, use_container_width=True, hide_index=True)
-        st.caption(f"{len(_filtered_exp):,} segments — {len(_sel_groups)} group(s) selected.")
+        _exp_styler = (
+            _filtered_exp.set_index("Segment ID")
+            .style
+            .apply(lambda s: s.map(_n_color), subset=["Unique Users"], axis=0)
+            .format(na_rep="")
+        )
+        _exp_h = max(300, min(700, 60 + len(_filtered_exp) * 26))
+        components.html(
+            _styled_html_table(_exp_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_exp_h),
+            height=_exp_h, scrolling=True,
+        )
+        st.caption(f"{len(_filtered_exp):,} segments \u2014 {len(_sel_groups)} group(s) selected. Hover over a segment ID for its description.")
 
         st.divider()
 
@@ -1452,7 +1462,7 @@ with tab_simulator:
                 lift_val = row["Expected Lift"]
                 label    = row["Communication"]
                 n_val    = int(row["Total N"]) if pd.notna(row["Total N"]) else 0
-                delta_str = f"N = {n_val:,}"
+                delta_str = f"{n_val:,} users"
                 if pd.notna(lift_val):
                     kpi_cols[i].metric(label, f"{lift_val:.2%}", delta_str)
                 else:
@@ -1559,38 +1569,10 @@ with tab_export:
         st.divider()
 
         # ── Download cards ────────────────────────────────────────────────────
-        _card_css = """
-<style>
-.exp-card {
-    background: #1e2030;
-    border: 1px solid #383a52;
-    border-radius: 10px;
-    padding: 22px 20px 18px 20px;
-    height: 100%;
-}
-.exp-card h3 { margin: 0 0 6px 0; font-size: 15px; color: #e0e0ff; }
-.exp-card .badge {
-    display: inline-block;
-    background: #2e3154;
-    color: #a0aecf;
-    font-size: 10px;
-    font-weight: 600;
-    letter-spacing: 0.5px;
-    border-radius: 4px;
-    padding: 2px 7px;
-    margin-bottom: 10px;
-}
-.exp-card p { font-size: 12px; color: #8a8fac; line-height: 1.6; margin: 0; }
-</style>"""
-        components.html(_card_css + "<div></div>", height=0)
-
-        xc1, xc2, xc3 = st.columns(3, gap="medium")
+        xc1, xc2, xc3 = st.columns(3)
 
         with xc1:
-            st.markdown(
-                """<div class="exp-card"><h3>CSV</h3></div>""",
-                unsafe_allow_html=True,
-            )
+            st.markdown("**CSV**")
             csv_bytes = tbl.reset_index().to_csv(index=False).encode("utf-8")
             st.download_button(
                 "Download CSV",
@@ -1599,10 +1581,7 @@ with tab_export:
             )
 
         with xc2:
-            st.markdown(
-                """<div class="exp-card"><h3>Excel (.xlsx)</h3></div>""",
-                unsafe_allow_html=True,
-            )
+            st.markdown("**Excel (.xlsx)**")
             try:
                 xlsx_bytes = build_excel(tbl, ordered_comms)
                 st.download_button(
@@ -1615,11 +1594,7 @@ with tab_export:
                 st.error(f"Excel error: {e}")
 
         with xc3:
-            st.markdown(
-                """<div class="exp-card"><h3>PowerPoint (.pptx)</h3></div>""",
-                unsafe_allow_html=True,
-            )
-            st.write("")
+            st.markdown("**PowerPoint (.pptx)**")
             try:
                 pptx_bytes = build_pptx(tbl, ordered_comms)
                 st.download_button(
@@ -1635,16 +1610,20 @@ with tab_export:
 
         # ── Data preview ─────────────────────────────────────────────────────
         with st.expander("Preview data", expanded=True):
-            _prev = tbl.reset_index()
-            _prev_disp = _prev.head(10)
-            _pct_cols_prev = [c for c in _prev_disp.columns if any(c.endswith(s) for s in ("_bal", "_acct", "_lift_bal", "_lift_acct"))]
-            st.dataframe(
-                _prev_disp.style.format(
-                    {c: "{:.1%}" for c in _pct_cols_prev if c in _prev_disp.columns},
-                    na_rep="—"
-                ),
-                use_container_width=True,
-                hide_index=True,
+            _prev_tbl = tbl.head(10)
+            _pct_cols_prev = [c for c in _prev_tbl.columns if any(c.endswith(s) for s in ("_bal", "_acct", "_lift_bal", "_lift_acct"))]
+            _n_cols_prev   = [c for c in _prev_tbl.columns if c.endswith("_n") or c == "agg_n"]
+            _prev_fmt = {c: (lambda v: f"{v*100:.1f}%" if pd.notna(v) else "") for c in _pct_cols_prev}
+            _prev_fmt.update({c: "{:,.0f}" for c in _n_cols_prev if c in _prev_tbl.columns})
+            _prev_styler = _prev_tbl.style.format(_prev_fmt, na_rep="")
+            if _pct_cols_prev:
+                _prev_styler = _prev_styler.apply(lambda s: s.map(_rdylgn), subset=_pct_cols_prev, axis=0)
+            if _n_cols_prev:
+                _prev_styler = _prev_styler.apply(lambda s: s.map(_n_color), subset=_n_cols_prev, axis=0)
+            _prev_h = max(300, min(500, 80 + len(_prev_tbl) * 28))
+            components.html(
+                _styled_html_table(_prev_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_prev_h),
+                height=_prev_h, scrolling=True,
             )
             st.caption(f"Showing first 10 of {_n_segs} segments.")
 
