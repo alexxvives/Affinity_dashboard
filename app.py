@@ -521,7 +521,7 @@ def style_tbl(
               border-bottom: 2px solid #555; white-space: nowrap; font-size: 11px; }}
   thead th:not(.blank) {{ cursor: pointer; user-select: none; }}
   thead th:not(.blank):hover {{ background: #3a3c4a; }}
-  tbody td {{ padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; }}
+  tbody td {{ padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; color: #111; }}
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
                     color: #aaa !important; font-weight: normal; cursor: help; }}
@@ -620,7 +620,7 @@ def _styled_html_table(
   thead th {{ background: #262730; color: #fafafa; padding: 6px 10px;
               text-align: left; position: sticky; top: 0; z-index: 2;
               border-bottom: 2px solid #555; white-space: nowrap; font-size: 11px; }}
-  tbody td {{ padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; }}
+  tbody td {{ padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; color: #111; }}
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
                     color: #ccc !important; font-weight: normal; cursor: help; }}
@@ -1609,23 +1609,23 @@ with tab_export:
         st.divider()
 
         # ── Data preview ─────────────────────────────────────────────────────
-        with st.expander("Preview data", expanded=True):
-            _prev_tbl = tbl.head(10)
-            _pct_cols_prev = [c for c in _prev_tbl.columns if any(c.endswith(s) for s in ("_bal", "_acct", "_lift_bal", "_lift_acct"))]
-            _n_cols_prev   = [c for c in _prev_tbl.columns if c.endswith("_n") or c == "agg_n"]
-            _prev_fmt = {c: (lambda v: f"{v*100:.1f}%" if pd.notna(v) else "") for c in _pct_cols_prev}
-            _prev_fmt.update({c: "{:,.0f}" for c in _n_cols_prev if c in _prev_tbl.columns})
-            _prev_styler = _prev_tbl.style.format(_prev_fmt, na_rep="")
-            if _pct_cols_prev:
-                _prev_styler = _prev_styler.apply(lambda s: s.map(_rdylgn), subset=_pct_cols_prev, axis=0)
-            if _n_cols_prev:
-                _prev_styler = _prev_styler.apply(lambda s: s.map(_n_color), subset=_n_cols_prev, axis=0)
-            _prev_h = max(300, min(500, 80 + len(_prev_tbl) * 28))
-            components.html(
-                _styled_html_table(_prev_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_prev_h),
-                height=_prev_h, scrolling=True,
-            )
-            st.caption(f"Showing first 10 of {_n_segs} segments.")
+        st.markdown("**Preview data**")
+        _prev_tbl = tbl.head(10)
+        _pct_cols_prev = [c for c in _prev_tbl.columns if any(c.endswith(s) for s in ("_bal", "_acct", "_lift_bal", "_lift_acct"))]
+        _n_cols_prev   = [c for c in _prev_tbl.columns if c.endswith("_n") or c == "agg_n"]
+        _prev_fmt = {c: (lambda v: f"{v*100:.1f}%" if pd.notna(v) else "") for c in _pct_cols_prev}
+        _prev_fmt.update({c: "{:,.0f}" for c in _n_cols_prev if c in _prev_tbl.columns})
+        _prev_styler = _prev_tbl.style.format(_prev_fmt, na_rep="")
+        if _pct_cols_prev:
+            _prev_styler = _prev_styler.apply(lambda s: s.map(_rdylgn), subset=_pct_cols_prev, axis=0)
+        if _n_cols_prev:
+            _prev_styler = _prev_styler.apply(lambda s: s.map(_n_color), subset=_n_cols_prev, axis=0)
+        _prev_h = max(300, min(500, 80 + len(_prev_tbl) * 28))
+        components.html(
+            _styled_html_table(_prev_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_prev_h),
+            height=_prev_h, scrolling=True,
+        )
+        st.caption(f"Showing first 10 of {_n_segs} segments.")
 
 
 # ══════════════════════════════════════════════════════════
