@@ -711,6 +711,16 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Display")
+    # Square CSS for the flanking ±1 buttons
+    st.markdown("""
+    <style>
+    section[data-testid="stSidebar"] .stButton button {
+        min-width: 2.2rem !important; max-width: 2.2rem !important;
+        height: 2.2rem !important; padding: 0 !important;
+        font-size: 1rem !important; line-height: 1 !important;
+    }
+    </style>
+    """, unsafe_allow_html=True)
     # ── min_n: slider + −1/+1 flanking buttons ───────────────────────────────
     if "min_n_val" not in st.session_state:
         st.session_state["min_n_val"] = 25
@@ -769,11 +779,11 @@ if not ordered_comms:
     ordered_comms = _all_present_comms[:]
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_explorer, tab_table, tab_charts, tab_simulator, tab_export, tab_audit = st.tabs([
+tab_explorer, tab_table, tab_simulator, tab_charts, tab_export, tab_audit = st.tabs([
     "Segment Explorer",
     "Table",
-    "Charts",
     "Targeting Simulator",
+    "Charts",
     "Export",
     "Audit",
 ])
@@ -836,7 +846,10 @@ with tab_explorer:
             )
             _fig_gsz.update_xaxes(tickangle=-30)
             _fig_gsz.update_traces(textposition="outside")
-            _fig_gsz.update_layout(coloraxis_showscale=False, height=360)
+            _fig_gsz.update_layout(
+                coloraxis_showscale=False, height=360,
+                yaxis_range=[0, int(_grp_sz["Segments"].max()) * 1.20],
+            )
             st.plotly_chart(_fig_gsz, use_container_width=True)
         with _ec2:
             _fig_gus = px.bar(
@@ -847,7 +860,10 @@ with tab_explorer:
             )
             _fig_gus.update_xaxes(tickangle=-30)
             _fig_gus.update_traces(textposition="outside")
-            _fig_gus.update_layout(coloraxis_showscale=False, height=360)
+            _fig_gus.update_layout(
+                coloraxis_showscale=False, height=360,
+                yaxis_range=[0, int(_grp_sz["Users"].max()) * 1.20],
+            )
             st.plotly_chart(_fig_gus, use_container_width=True)
 
 
@@ -865,20 +881,17 @@ with tab_table:
     if not ordered_comms:
         ordered_comms = _all_present_comms[:]
 
-    # ── Row 2: show columns multiselect + sample size ─────────────────────────
-    _row2_c1, _row2_c2 = st.columns([6, 2])
-    with _row2_c1:
-        _metric_sel = st.multiselect(
-            "Show columns",
-            ["Balance", "Accounts"],
-            default=["Balance", "Accounts"],
-            key="show_metric_ms",
-        )
-    with _row2_c2:
-        show_n_cols = st.checkbox("Show sample size", value=False, key="tbl_show_n")
+    # ── Row 2: show columns multiselect (Balance / Accounts / Sample size) ─────
+    _metric_sel = st.multiselect(
+        "Show columns",
+        ["Balance", "Accounts", "Sample size"],
+        default=["Balance", "Accounts"],
+        key="show_metric_ms",
+    )
     _sel = _metric_sel or ["Balance", "Accounts"]
-    _show_bal  = "Balance"  in _sel
-    _show_acct = "Accounts" in _sel
+    _show_bal  = "Balance"     in _sel
+    _show_acct = "Accounts"    in _sel
+    show_n_cols = "Sample size" in _sel
     if _show_bal and not _show_acct:
         _show_metric_val = "balance"
     elif _show_acct and not _show_bal:
@@ -1326,27 +1339,29 @@ with tab_simulator:
                 else:
                     kpi_cols[i].metric(label, "—", delta_str)
 
-            # Projected absolute balance increase row
-            st.markdown("#### Projected absolute balance increase")
-            proj_b_cols = st.columns(len(sim_summary))
-            for i, row in sim_summary.iterrows():
-                pv = row["Projected Bal \u20ac"]
-                nu = int(row["Comm Users"]) if pd.notna(row.get("Comm Users")) else 0
-                proj_b_cols[i].metric(
-                    row["Communication"],
-                    f"\u20ac{pv:,.0f}" if pd.notna(pv) else "—",
-                    f"{nu:,} users",
-                )
-
-            # Projected account openings row
-            st.markdown("#### Projected account openings")
-            proj_a_cols = st.columns(len(sim_summary))
-            for i, row in sim_summary.iterrows():
-                av = row["Proj. Accounts"]
-                proj_a_cols[i].metric(
-                    row["Communication"],
-                    f"{av:,.0f}" if pd.notna(av) else "—",
-                )
+            # Projected row — only show the metric matching the selected metric
+            if sim_metric == "Balance % lift":
+                st.markdown("#### Projected absolute balance increase")
+                proj_b_cols = st.columns(len(sim_summary))
+                for i, row in sim_summary.iterrows():
+                    pv = row["Projected Bal \u20ac"]
+                    nu = int(row["Comm Users"]) if pd.notna(row.get("Comm Users")) else 0
+                    proj_b_cols[i].metric(
+                        row["Communication"],
+                        f"\u20ac{pv:,.0f}" if pd.notna(pv) else "—",
+                        f"{nu:,} users",
+                    )
+            else:
+                st.markdown("#### Projected account openings")
+                proj_a_cols = st.columns(len(sim_summary))
+                for i, row in sim_summary.iterrows():
+                    av = row["Proj. Accounts"]
+                    nu = int(row["Comm Users"]) if pd.notna(row.get("Comm Users")) else 0
+                    proj_a_cols[i].metric(
+                        row["Communication"],
+                        f"{av:,.0f}" if pd.notna(av) else "—",
+                        f"{nu:,} users",
+                    )
 
             st.divider()
 
