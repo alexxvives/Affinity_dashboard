@@ -349,28 +349,7 @@ def style_tbl(
     if n_cols:
         styler = styler.apply(lambda s: s.map(_n_color), subset=n_cols, axis=0)
 
-    # Build HTML manually to get proper CSS-hover tooltips on the nsegment index
     table_html = styler.to_html()
-
-    # Inject tooltip CSS spans into the index cells using string replacement
-    if seg_labels or seg_desc:
-        import re
-        def _replace_idx_cell(m):
-            cell_id = m.group(1).strip()
-            label = seg_labels.get(cell_id, "") if seg_labels else ""
-            desc  = seg_desc.get(cell_id, "")   if seg_desc  else ""
-            tooltip_text = desc if desc else label
-            if tooltip_text:
-                display = f'<span class="seg-id">{cell_id}</span><span class="seg-tip">{tooltip_text}</span>'
-            else:
-                display = cell_id
-            return f'<th class="row_heading level0">{display}</th>'
-        # Flexible regex — handles id="..." attr before or after class, pandas 1.x/2.x both
-        table_html = re.sub(
-            r'<th[^>]+class="[^"]*row_heading level0[^"]*"[^>]*>\s*([^<]+?)\s*</th>',
-            _replace_idx_cell,
-            table_html,
-        )
 
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
@@ -384,26 +363,8 @@ def style_tbl(
   tbody td {{ padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; }}
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
-                    color: #aaa !important; font-weight: normal; position: relative; }}
+                    color: #aaa !important; font-weight: normal; }}
   th.blank {{ background: #262730 !important; }}
-  .seg-id {{ display: inline-block; }}
-  .seg-tip {{
-    display: none;
-    position: absolute;
-    left: 110%;
-    top: 0;
-    z-index: 9999;
-    background: #1a1a2e;
-    color: #eee;
-    padding: 6px 10px;
-    border-radius: 5px;
-    font-size: 12px;
-    max-width: 2100px;
-    white-space: normal;
-    box-shadow: 0 2px 8px rgba(0,0,0,0.5);
-    pointer-events: none;
-  }}
-  th.row_heading:hover .seg-tip {{ display: block; }}
 </style></head>
 <body><div style="overflow:auto; max-height: 615px;">
 {table_html}
@@ -560,6 +521,23 @@ if missing_cols:
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
+    # ── Segment lookup ────────────────────────────────────────────────────
+    if SEGMENT_LABELS or SEGMENT_DESCRIPTIONS:
+        st.subheader("🔍 Segment Lookup")
+        _lookup_id = st.text_input("Segment ID", placeholder="e.g. 1000001", key="seg_lookup")
+        if _lookup_id.strip():
+            _lid  = _lookup_id.strip()
+            _lbl  = SEGMENT_LABELS.get(_lid, "")
+            _desc = SEGMENT_DESCRIPTIONS.get(_lid, "")
+            if _lbl or _desc:
+                if _lbl:
+                    st.markdown(f"**{_lbl}**")
+                if _desc:
+                    st.caption(_desc)
+            else:
+                st.caption("No description found for this segment ID.")
+        st.divider()
+
     st.header("Filters")
     selected_comms = st.multiselect("Communications", options=COMM_ORDER, default=COMM_ORDER)
 
@@ -568,8 +546,11 @@ with st.sidebar:
     _dates = pd.to_datetime(df_raw["start_date"], errors="coerce").dropna()
     _d_min = _dates.min().date()
     _d_max = _dates.max().date()
-    date_from = st.date_input("From", value=_d_min, min_value=_d_min, max_value=_d_max)
-    date_to   = st.date_input("To",   value=_d_max, min_value=_d_min, max_value=_d_max)
+    _dcol1, _dcol2 = st.columns(2)
+    with _dcol1:
+        date_from = st.date_input("From", value=_d_min, min_value=_d_min, max_value=_d_max)
+    with _dcol2:
+        date_to = st.date_input("To", value=_d_max, min_value=_d_min, max_value=_d_max)
 
     st.divider()
     st.subheader("Display")
@@ -695,7 +676,7 @@ with tab_charts:
                 ci_col = sort_col.replace("_bal", "_bal_ci").replace("_acct", "_acct_ci")
             has_ci = ci_col is not None and ci_col in tbl.columns
 
-            x_labels = [f"{x}  {SEGMENT_LABELS.get(str(x), '')}" for x in top_data.index]
+            x_labels = [str(x) for x in top_data.index]
             fig_bar = px.bar(
                 x=x_labels,
                 y=top_data.values * 100,
@@ -729,7 +710,7 @@ with tab_charts:
             hm.columns = [c.replace("_bal", "") for c in heat_cols]
             hm["_mean"] = hm.mean(axis=1)
             hm = hm.sort_values("_mean", ascending=False).head(50).drop(columns="_mean")
-            y_labels = [f"{x}  {SEGMENT_LABELS.get(str(x), '')}" for x in hm.index]
+            y_labels = [str(x) for x in hm.index]
             fig_hm = px.imshow(
                 hm.values * 100, x=list(hm.columns), y=y_labels,
                 labels=dict(x="Communication", y="Segment", color="Bal% Δ"),
@@ -768,7 +749,7 @@ with tab_charts:
                     if not grp.empty:
                         jt_rows.append({
                             "Communication": comm,
-                            "Segment": f"{seg}  {SEGMENT_LABELS.get(seg, '')}",
+                            "Segment": seg,
                             "Avg Balance % Change": grp["balance_pct_change"].mean(),
                             "_rank": _rank(comm),
                         })
@@ -822,7 +803,7 @@ with tab_charts:
             diag[diag == 0] = 1
             cooc_norm = cooc_matrix.values / diag[:, None]
         cooc_norm_df = pd.DataFrame(cooc_norm, index=cooc_segs, columns=cooc_segs)
-        y_lbl = [f"{x} {SEGMENT_LABELS.get(x, '')}" for x in cooc_segs]
+        y_lbl = list(cooc_segs)
         fig_cooc = px.imshow(
             cooc_norm_df.values,
             x=y_lbl, y=y_lbl,
@@ -863,7 +844,7 @@ with tab_charts:
             ].dropna(subset=["balance_pct_change"])
             if not dv.empty:
                 dv = dv.copy()
-                dv["_label"] = dv["nsegment"].map(lambda x: f"{x}  {SEGMENT_LABELS.get(x, '')}")
+                dv["_label"] = dv["nsegment"].astype(str)
                 fig_v = px.violin(
                     dv, x="Communication", y="balance_pct_change",
                     color="_label", box=True, points=False,
