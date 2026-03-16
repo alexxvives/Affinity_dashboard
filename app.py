@@ -1176,52 +1176,58 @@ with tab_charts:
         _cooc_sort = next((f"{c}_bal" for c in ordered_comms if f"{c}_bal" in tbl.columns), None)
         top_segs_cooc = (tbl.sort_values(_cooc_sort, ascending=False).head(30).index.astype(str).tolist()
                          if _cooc_sort else tbl.index.astype(str).tolist()[:30])
-        cooc_n = st.slider("Top N segments to include", 5, min(50, len(top_segs_cooc)), min(20, len(top_segs_cooc)), key="cooc_n")
-        cooc_segs = top_segs_cooc[:cooc_n]
+        if len(top_segs_cooc) < 2:
+            st.info("Not enough segments with data to compute co-occurrence. Adjust filters.")
+        else:
+            _cooc_min = min(5, len(top_segs_cooc))
+            _cooc_max = min(50, len(top_segs_cooc))
+            _cooc_def = min(20, _cooc_max)
+            cooc_n = st.slider("Top N segments to include", _cooc_min, _cooc_max, _cooc_def, key="cooc_n")
+            cooc_segs = top_segs_cooc[:cooc_n]
 
-        user_seg_df = (
-            df[df["nsegment"].isin(cooc_segs)]
-            .groupby("alpha_key")["nsegment"]
-            .apply(set)
-            .reset_index()
-        )
-        n_users_total = user_seg_df["alpha_key"].nunique()
-        cooc_matrix = pd.DataFrame(0.0, index=cooc_segs, columns=cooc_segs)
-        for _, row in user_seg_df.iterrows():
-            segs = list(row["nsegment"])
-            for i, si in enumerate(segs):
-                for sj in segs:
-                    if si in cooc_matrix.index and sj in cooc_matrix.columns:
-                        cooc_matrix.loc[si, sj] += 1
-        # Normalize by diagonal (self-count = total users in segment)
-        with np.errstate(divide="ignore", invalid="ignore"):
-            diag = np.diag(cooc_matrix.values).copy()
-            diag[diag == 0] = 1
-            cooc_norm = cooc_matrix.values / diag[:, None]
-        cooc_norm_df = pd.DataFrame(cooc_norm, index=cooc_segs, columns=cooc_segs)
-        cooc_norm_df.index   = [str(s) for s in cooc_segs]
-        cooc_norm_df.columns = [str(s) for s in cooc_segs]
-        # Sort rows by max off-diagonal co-occurrence (highest overlap at top)
-        _off_diag = cooc_norm_df.copy()
-        np.fill_diagonal(_off_diag.values, 0)
-        _row_order = _off_diag.max(axis=1).sort_values(ascending=False).index.tolist()
-        cooc_norm_df = cooc_norm_df.loc[_row_order, _row_order]
-        fig_cooc = px.imshow(
-            cooc_norm_df,
-            color_continuous_scale="Blues",
-            zmin=0, zmax=1,
-            labels=dict(color="Share of row-seg users"),
-            title="Segment co-occurrence (row = % of row-segment users who also belong to col-segment)",
-            aspect="auto",
-        )
-        fig_cooc.update_xaxes(type="category")
-        fig_cooc.update_yaxes(type="category", autorange="reversed")
-        fig_cooc.update_layout(height=600)
-        st.plotly_chart(fig_cooc, use_container_width=True)
-        st.caption(
-            "**How to read**: cell [A, B] = fraction of segment A users who are also in segment B. "
-            "High values (dark blue) mean heavy overlap — avoid targeting both segments simultaneously."
-        )
+            user_seg_df = (
+                df[df["nsegment"].isin(cooc_segs)]
+                .groupby("alpha_key")["nsegment"]
+                .apply(set)
+                .reset_index()
+            )
+            n_users_total = user_seg_df["alpha_key"].nunique()
+            cooc_matrix = pd.DataFrame(0.0, index=cooc_segs, columns=cooc_segs)
+            for _, row in user_seg_df.iterrows():
+                segs = list(row["nsegment"])
+                for i, si in enumerate(segs):
+                    for sj in segs:
+                        if si in cooc_matrix.index and sj in cooc_matrix.columns:
+                            cooc_matrix.loc[si, sj] += 1
+            # Normalize by diagonal (self-count = total users in segment)
+            with np.errstate(divide="ignore", invalid="ignore"):
+                diag = np.diag(cooc_matrix.values).copy()
+                diag[diag == 0] = 1
+                cooc_norm = cooc_matrix.values / diag[:, None]
+            cooc_norm_df = pd.DataFrame(cooc_norm, index=cooc_segs, columns=cooc_segs)
+            cooc_norm_df.index   = [str(s) for s in cooc_segs]
+            cooc_norm_df.columns = [str(s) for s in cooc_segs]
+            # Sort rows by max off-diagonal co-occurrence (highest overlap at top)
+            _off_diag = cooc_norm_df.copy()
+            np.fill_diagonal(_off_diag.values, 0)
+            _row_order = _off_diag.max(axis=1).sort_values(ascending=False).index.tolist()
+            cooc_norm_df = cooc_norm_df.loc[_row_order, _row_order]
+            fig_cooc = px.imshow(
+                cooc_norm_df,
+                color_continuous_scale="Blues",
+                zmin=0, zmax=1,
+                labels=dict(color="Share of row-seg users"),
+                title="Segment co-occurrence (row = % of row-segment users who also belong to col-segment)",
+                aspect="auto",
+            )
+            fig_cooc.update_xaxes(type="category")
+            fig_cooc.update_yaxes(type="category", autorange="reversed")
+            fig_cooc.update_layout(height=600)
+            st.plotly_chart(fig_cooc, use_container_width=True)
+            st.caption(
+                "**How to read**: cell [A, B] = fraction of segment A users who are also in segment B. "
+                "High values (dark blue) mean heavy overlap — avoid targeting both segments simultaneously."
+            )
 
         st.divider()
 
