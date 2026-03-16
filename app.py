@@ -684,7 +684,7 @@ def build_pptx(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
     sl = prs.slides.add_slide(blank_layout)
     txb = sl.shapes.add_textbox(Inches(1), Inches(2.5), Inches(11), Inches(2))
     tf = txb.text_frame
-    tf.text = "Nsegment Explorer"
+    tf.text = "Affinity Explorer"
     tf.paragraphs[0].runs[0].font.size = Pt(36)
     tf.paragraphs[0].runs[0].font.bold = True
     tf.paragraphs[0].runs[0].font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
@@ -739,17 +739,17 @@ def build_pptx(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
 
 
 # ── Page config ───────────────────────────────────────────────────────────────
-st.set_page_config(page_title="Nsegment Explorer", layout="wide")
-st.title("Nsegment Explorer")
+st.set_page_config(page_title="Affinity Explorer", layout="wide")
 
 st.markdown("""
 <style>
 span[data-baseweb="tag"] { background-color: #31333F !important; }
 span[data-baseweb="tag"] span { color: #FAFAFA !important; }
 span[data-baseweb="tag"] button { color: #FAFAFA !important; }
-div.block-container { padding-top: 1.5rem !important; }
+div.block-container { padding-top: 3rem !important; }
 </style>
 """, unsafe_allow_html=True)
+st.title("Affinity Explorer")
 
 # ── Load raw CSV ──────────────────────────────────────────────────────────────
 try:
@@ -764,6 +764,9 @@ missing_cols = [c for c in REQUIRED_COLS if c not in df_raw.columns]
 if missing_cols:
     st.error("Missing required columns: " + ", ".join(missing_cols))
     st.stop()
+
+# Max unique users in the dataset — used as the upper bound for the min-N slider
+_max_slider_n = max(30, int(df_raw["alpha_key"].nunique()))
 
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
@@ -795,15 +798,17 @@ with st.sidebar:
     """, unsafe_allow_html=True)
     # ── min_n: slider + −1/+1 flanking buttons ───────────────────────────────
     if "min_n_val" not in st.session_state:
-        st.session_state["min_n_val"] = 25
+        st.session_state["min_n_val"] = 0
+    # Clamp stored value if dataset changed
+    st.session_state["min_n_val"] = max(0, min(_max_slider_n, st.session_state["min_n_val"]))
     st.caption("Hide cells with fewer than N users")
     _mn_c1, _mn_c2, _mn_c3 = st.columns([1, 10, 1])
     if _mn_c1.button("−", key="mn_m1"):
         st.session_state["min_n_val"] = max(0, st.session_state["min_n_val"] - 1)
     if _mn_c3.button("+", key="mn_p1"):
-        st.session_state["min_n_val"] = min(200, st.session_state["min_n_val"] + 1)
+        st.session_state["min_n_val"] = min(_max_slider_n, st.session_state["min_n_val"] + 1)
     with _mn_c2:
-        min_n = st.slider("N", 0, 200, key="min_n_val", label_visibility="collapsed")
+        min_n = st.slider("N", 0, _max_slider_n, key="min_n_val", label_visibility="collapsed")
 
     st.divider()
     with st.expander("⚙️ Advanced filters", expanded=False):
@@ -1583,14 +1588,9 @@ with tab_export:
 
         with xc1:
             st.markdown(
-                """<div class="exp-card">
-                <h3>CSV</h3>
-                <span class="badge">PLAIN TEXT</span>
-                <p>Raw numbers, no formatting. Best for Python / SQL / BI tools.</p>
-                </div>""",
+                """<div class="exp-card"><h3>CSV</h3></div>""",
                 unsafe_allow_html=True,
             )
-            st.write("")
             csv_bytes = tbl.reset_index().to_csv(index=False).encode("utf-8")
             st.download_button(
                 "Download CSV",
@@ -1600,14 +1600,9 @@ with tab_export:
 
         with xc2:
             st.markdown(
-                """<div class="exp-card">
-                <h3>Excel (.xlsx)</h3>
-                <span class="badge">SPREADSHEET</span>
-                <p>Colour-coded conditional formatting — open directly in Excel or Sheets.</p>
-                </div>""",
+                """<div class="exp-card"><h3>Excel (.xlsx)</h3></div>""",
                 unsafe_allow_html=True,
             )
-            st.write("")
             try:
                 xlsx_bytes = build_excel(tbl, ordered_comms)
                 st.download_button(
@@ -1621,11 +1616,7 @@ with tab_export:
 
         with xc3:
             st.markdown(
-                """<div class="exp-card">
-                <h3>PowerPoint (.pptx)</h3>
-                <span class="badge">PRESENTATION</span>
-                <p>Title slide + top-20 segments table slide. Ready to paste into a deck.</p>
-                </div>""",
+                """<div class="exp-card"><h3>PowerPoint (.pptx)</h3></div>""",
                 unsafe_allow_html=True,
             )
             st.write("")
