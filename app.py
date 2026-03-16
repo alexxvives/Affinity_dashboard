@@ -694,8 +694,22 @@ with st.sidebar:
     st.subheader("Display")
     show_n_cols = st.checkbox("Show N (sample size) columns", value=False)
     show_lift   = st.checkbox("Show lift vs control (replaces raw %)", value=False)
-    min_n       = st.slider("Hide cells with fewer than N users", 0, 100, 25, step=1,
-                            help="Cells with fewer unique contacted users are shown as blank.")
+    # ── min_n with +/−1 and +/−10 buttons ───────────────────────────────────
+    if "min_n_val" not in st.session_state:
+        st.session_state["min_n_val"] = 25
+    _mn_label = st.empty()
+    _mn_label.markdown(f"**Hide cells with fewer than {st.session_state['min_n_val']} users**")
+    _btn1, _btn2, _btn3, _btn4, _btn5 = st.columns(5)
+    if _btn1.button("-10", key="mn_m10"):
+        st.session_state["min_n_val"] = max(0, st.session_state["min_n_val"] - 10)
+    if _btn2.button("-1",  key="mn_m1"):
+        st.session_state["min_n_val"] = max(0, st.session_state["min_n_val"] - 1)
+    if _btn4.button("+1",  key="mn_p1"):
+        st.session_state["min_n_val"] = min(200, st.session_state["min_n_val"] + 1)
+    if _btn5.button("+10", key="mn_p10"):
+        st.session_state["min_n_val"] = min(200, st.session_state["min_n_val"] + 10)
+    _mn_label.markdown(f"**Hide cells with fewer than {st.session_state['min_n_val']} users**")
+    min_n = st.session_state["min_n_val"]
 
     st.divider()
     with st.expander("⚙️ Advanced filters", expanded=False):
@@ -763,29 +777,90 @@ with tab_explorer:
         st.info("No segment descriptions found. Ensure segment_descriptions.csv is present in the app directory.")
     else:
         _seg_stats = (
-            df.groupby("nsegment")
-            .agg(
-                Unique_Users=("alpha_key", "nunique"),
-                Contacts=("Contact_flag", "sum"),
-            )
+            df[df["Contact_flag"] == 1]
+            .groupby("nsegment")
+            .agg(Unique_Users=("alpha_key", "nunique"))
             .reset_index()
             .rename(columns={"nsegment": "Segment ID", "Unique_Users": "Unique Users"})
         )
         _seg_stats["Label"] = _seg_stats["Segment ID"].map(SEGMENT_LABELS).fillna("—")
         _seg_stats["Description"] = _seg_stats["Segment ID"].map(SEGMENT_DESCRIPTIONS).fillna("—")
+
+        # Avg balance % change per segment (contacted users)
+        _bal_avg = (
+            df[df["Contact_flag"] == 1]
+            .groupby("nsegment")["balance_pct_change"]
+            .mean()
+            .rename("Avg Bal% Δ")
+        )
+        _acct_avg = (
+            df[df["Contact_flag"] == 1]
+            .groupby("nsegment")["accounts_pct_change"]
+            .mean()
+            .rename("Avg Acct% Δ")
+        )
+        _seg_stats = _seg_stats.merge(_bal_avg, left_on="Segment ID", right_index=True, how="left")
+        _seg_stats = _seg_stats.merge(_acct_avg, left_on="Segment ID", right_index=True, how="left")
         _seg_stats = (
-            _seg_stats[["Segment ID", "Label", "Description", "Unique Users", "Contacts"]]
+            _seg_stats[["Segment ID", "Label", "Description", "Unique Users", "Avg Bal% Δ", "Avg Acct% Δ"]]
             .sort_values(["Label", "Segment ID"])
             .reset_index(drop=True)
         )
+
         _all_groups = sorted(_seg_stats["Label"].unique().tolist())
-        _xcol1, _xcol2 = st.columns([3, 1])
-        with _xcol1:
+        _xc1, _xc2, _xc3 = st.columns([3, 1, 1])
+        with _xc1:
             _sel_groups = st.multiselect(
                 "Filter by group", _all_groups, default=_all_groups, key="explorer_groups"
             )
-        _filtered_stats = _seg_stats[_seg_stats["Label"].isin(_sel_groups)]
-        st.dataframe(_filtered_stats, use_container_width=True, hide_index=True)
+        with _xc3:
+            _exp_metric = st.radio("Sort metric", ["Avg Bal% Δ", "Avg Acct% Δ"], horizontal=True, key="exp_metric")
+        _filtered_stats = _seg_stats[_seg_stats["Label"].isin(_sel_groups)].copy()
+
+        # ── Group-level summary bar chart ────────────────────────────────────
+        _group_summary = (
+            _filtered_stats.groupby("Label")[["Avg Bal% Δ", "Avg Acct% Δ", "Unique Users"]]
+            .agg({"Avg Bal% Δ": "mean", "Avg Acct% Δ": "mean", "Unique Users": "sum"})
+            .reset_index()
+            .sort_values(_exp_metric, ascending=False)
+        )
+        if not _group_summary.empty:
+            _fig_grp = px.bar(
+                _group_summary,
+                x="Label", y=_exp_metric,
+                color=_exp_metric, color_continuous_scale="RdYlGn",
+                text=_group_summary[_exp_metric].map(lambda v: f"{v*100:.1f}%" if pd.notna(v) else ""),
+                hover_data=["Unique Users"],
+                title=f"Segment groups — {_exp_metric} (avg across segments in group)",
+                labels={"Label": "Group", _exp_metric: _exp_metric},
+            )
+            _fig_grp.update_traces(textposition="outside")
+            _fig_grp.update_yaxes(tickformat=".1%")
+            _fig_grp.update_layout(coloraxis_showscale=False, height=340, xaxis_tickangle=-20)
+            st.plotly_chart(_fig_grp, use_container_width=True)
+
+        # ── Top segments within selected groups ──────────────────────────────
+        _top_segs_exp = _filtered_stats.sort_values(_exp_metric, ascending=False).head(20)
+        if not _top_segs_exp.empty:
+            _fig_top = px.bar(
+                _top_segs_exp,
+                x="Segment ID", y=_exp_metric,
+                color=_exp_metric, color_continuous_scale="RdYlGn",
+                hover_data=["Label", "Description", "Unique Users"],
+                title=f"Top 20 segments — {_exp_metric}",
+                labels={"Segment ID": "Segment", _exp_metric: _exp_metric},
+            )
+            _fig_top.update_xaxes(type="category", tickangle=-45)
+            _fig_top.update_yaxes(tickformat=".1%")
+            _fig_top.update_layout(coloraxis_showscale=False, height=360)
+            st.plotly_chart(_fig_top, use_container_width=True)
+
+        # ── Full table ───────────────────────────────────────────────────────
+        with st.expander("Full segment table", expanded=False):
+            _disp = _filtered_stats.copy()
+            _disp["Avg Bal% Δ"] = _disp["Avg Bal% Δ"].map(lambda v: f"{v*100:.1f}%" if pd.notna(v) else "")
+            _disp["Avg Acct% Δ"] = _disp["Avg Acct% Δ"].map(lambda v: f"{v*100:.1f}%" if pd.notna(v) else "")
+            st.dataframe(_disp, use_container_width=True, hide_index=True)
         st.caption(f"Showing {len(_filtered_stats):,} of {len(_seg_stats):,} segments across {len(_sel_groups)} group(s).")
 
 
@@ -852,15 +927,12 @@ with tab_charts:
             "Error bars (where shown) are 95% confidence intervals — wider bars mean less certainty."
         )
         # ── Bar chart ────────────────────────────────────────────────────────
-        _bc1, _bc2 = st.columns(2)
-        with _bc1:
-            top_n = st.slider("Top N segments", 5, min(150, len(tbl)), min(30, len(tbl)), key="chart_tn")
-        with _bc2:
-            metric_opts = ([f"{c} Bal%"       for c in ordered_comms]
-                           + [f"{c} Acct%"      for c in ordered_comms]
-                           + [f"{c} Lift Bal"   for c in ordered_comms]
-                           + [f"{c} Lift Acct"  for c in ordered_comms])
-            chosen = st.selectbox("Sort / highlight metric", metric_opts, key="chart_cm")
+        _TOP_N_CHART = 25
+        metric_opts = ([f"{c} Bal%"       for c in ordered_comms]
+                       + [f"{c} Acct%"      for c in ordered_comms]
+                       + [f"{c} Lift Bal"   for c in ordered_comms]
+                       + [f"{c} Lift Acct"  for c in ordered_comms])
+        chosen = st.selectbox("Sort / highlight metric", metric_opts, key="chart_cm")
 
         col_map = {
             **{f"{c} Bal%":      f"{c}_bal"       for c in ordered_comms},
@@ -872,9 +944,9 @@ with tab_charts:
         sort_col = col_map.get(chosen, _default_sort)
 
         if sort_col in tbl.columns:
-            top_data = tbl[sort_col].dropna().sort_values(ascending=False).head(top_n)
+            top_data = tbl[sort_col].dropna().sort_values(ascending=False).head(_TOP_N_CHART)
             if "_lift_" in sort_col:
-                ci_col = None  # lift columns have no CI band
+                ci_col = None
             else:
                 ci_col = sort_col.replace("_bal", "_bal_ci").replace("_acct", "_acct_ci")
             has_ci = ci_col is not None and ci_col in tbl.columns
@@ -887,9 +959,10 @@ with tab_charts:
                 color=top_data.values * 100,
                 color_continuous_scale="RdYlGn",
                 labels={"x": "Segment", "y": "Mean % change", "color": "%"},
-                title=f"Top {top_n} segments — {chosen}",
+                title=f"Top {_TOP_N_CHART} segments — {chosen}",
             )
             fig_bar.update_layout(coloraxis_showscale=False, xaxis_tickangle=-45, height=480)
+            fig_bar.update_xaxes(type="category")
             fig_bar.update_yaxes(ticksuffix="%")
             st.plotly_chart(fig_bar, use_container_width=True)
         else:
@@ -898,25 +971,28 @@ with tab_charts:
         st.divider()
 
         # ── Heatmap ─────────────────────────────────────────────────────────
-        st.subheader("Balance % change — segment × communication")
+        _hm_metric = st.radio("Heatmap metric", ["Balance %", "Accounts %"], horizontal=True, key="hm_metric")
+        _hm_suffix = "_bal" if _hm_metric == "Balance %" else "_acct"
+        _hm_label  = "Bal% Δ" if _hm_metric == "Balance %" else "Acct% Δ"
+        st.subheader(f"{_hm_label} — segment × communication")
         st.caption(
-            "🟩 **Heatmap** — each cell is the avg balance % change for a segment (row) "
+            "🟩 **Heatmap** — each cell is the avg % change for a segment (row) "
             "at a single communication touchpoint (column). Darker green = stronger positive response. "
             "Use this to spot which communications resonate with which segments, and identify "
             "segments that respond early vs late in the journey."
         )
-        heat_cols = [f"{c}_bal" for c in ordered_comms if f"{c}_bal" in tbl.columns]
+        heat_cols = [f"{c}{_hm_suffix}" for c in ordered_comms if f"{c}{_hm_suffix}" in tbl.columns]
         if heat_cols:
             hm = tbl[heat_cols].copy()
-            hm.columns = [c.replace("_bal", "") for c in heat_cols]
+            hm.columns = [c.replace(_hm_suffix, "") for c in heat_cols]
             hm["_mean"] = hm.mean(axis=1)
             hm = hm.sort_values("_mean", ascending=False).head(50).drop(columns="_mean")
             hm.index = hm.index.astype(str)
             fig_hm = px.imshow(
                 hm * 100,
-                labels=dict(x="Communication", y="Segment", color="Bal% Δ"),
+                labels=dict(x="Communication", y="Segment", color=_hm_label),
                 color_continuous_scale="RdYlGn", aspect="auto",
-                title="Balance % Δ — Top 50 segments",
+                title=f"{_hm_label} — Top 50 segments",
                 text_auto=".1f",
             )
             fig_hm.update_yaxes(type="category", autorange="reversed")
@@ -927,18 +1003,22 @@ with tab_charts:
         st.divider()
 
         # ── Journey timeline ─────────────────────────────────────────────────
-        st.subheader("🗺️ Journey Timeline — avg balance at each touchpoint")
+        st.subheader("🗺️ Journey Timeline — avg % change at each touchpoint")
         st.caption(
             "📈 **Journey timeline** — tracks how selected segments perform at each "
             "communication touchpoint. Rising lines = improving engagement over the journey. "
             "Flat or falling lines suggest fatigue or declining relevance at that stage. "
             "Useful for optimising send timing and dropping ineffective touchpoints."
         )
-        _jt_sort = next((f"{c}_bal" for c in ordered_comms if f"{c}_bal" in tbl.columns), None)
-        jt_pool = (tbl.sort_values(_jt_sort, ascending=False).head(30).index.astype(str).tolist()
-                   if _jt_sort else tbl.index.astype(str).tolist()[:30])
+        _jt_metric = st.radio("Journey metric", ["Balance %", "Accounts %"], horizontal=True, key="jt_metric")
+        _jt_col    = "balance_pct_change" if _jt_metric == "Balance %" else "accounts_pct_change"
+        _jt_ylabel = "Avg Balance % Change" if _jt_metric == "Balance %" else "Avg Accounts % Change"
+        _jt_sfx      = "_bal" if _jt_metric == "Balance %" else "_acct"
+        _jt_sort_col = next((f"{c}{_jt_sfx}" for c in ordered_comms if f"{c}{_jt_sfx}" in tbl.columns), None)
+        jt_pool = (tbl.sort_values(_jt_sort_col, ascending=False).head(30).index.astype(str).tolist()
+                   if _jt_sort_col else tbl.index.astype(str).tolist()[:30])
         jt_segs = st.multiselect(
-            "Segments for timeline (top 30 by agg bal%)",
+            "Segments for timeline (top 30)",
             options=jt_pool,
             default=jt_pool[:5],
             format_func=lambda x: f"{x}  —  {SEGMENT_LABELS.get(x, x)}",
@@ -954,16 +1034,16 @@ with tab_charts:
                         jt_rows.append({
                             "Communication": comm,
                             "Segment": seg,
-                            "Avg Balance % Change": grp["balance_pct_change"].mean(),
+                            _jt_ylabel: grp[_jt_col].mean(),
                             "_rank": _rank(comm),
                         })
             if jt_rows:
                 jt_df = pd.DataFrame(jt_rows).sort_values("_rank")
                 fig_jt = px.line(
-                    jt_df, x="Communication", y="Avg Balance % Change", color="Segment",
+                    jt_df, x="Communication", y=_jt_ylabel, color="Segment",
                     markers=True,
                     category_orders={"Communication": ordered_comms},
-                    title="Avg Balance % Change across journey touchpoints",
+                    title=f"{_jt_ylabel} across journey touchpoints",
                 )
                 fig_jt.update_yaxes(tickformat=".1%")
                 fig_jt.update_layout(height=450)
@@ -1009,6 +1089,11 @@ with tab_charts:
         cooc_norm_df = pd.DataFrame(cooc_norm, index=cooc_segs, columns=cooc_segs)
         cooc_norm_df.index   = [str(s) for s in cooc_segs]
         cooc_norm_df.columns = [str(s) for s in cooc_segs]
+        # Sort rows by max off-diagonal co-occurrence (highest overlap at top)
+        _off_diag = cooc_norm_df.copy()
+        np.fill_diagonal(_off_diag.values, 0)
+        _row_order = _off_diag.max(axis=1).sort_values(ascending=False).index.tolist()
+        cooc_norm_df = cooc_norm_df.loc[_row_order, _row_order]
         fig_cooc = px.imshow(
             cooc_norm_df,
             color_continuous_scale="Blues",
@@ -1018,7 +1103,7 @@ with tab_charts:
             aspect="auto",
         )
         fig_cooc.update_xaxes(type="category")
-        fig_cooc.update_yaxes(type="category")
+        fig_cooc.update_yaxes(type="category", autorange="reversed")
         fig_cooc.update_layout(height=600)
         st.plotly_chart(fig_cooc, use_container_width=True)
         st.caption(
@@ -1029,9 +1114,12 @@ with tab_charts:
         st.divider()
 
         # ── Violin / distribution ────────────────────────────────────────────
-        st.subheader("Balance % change distribution by communication")
+        _vio_metric = st.radio("Violin metric", ["Balance %", "Accounts %"], horizontal=True, key="vio_metric")
+        _vio_col    = "balance_pct_change" if _vio_metric == "Balance %" else "accounts_pct_change"
+        _vio_label  = "Balance % change"   if _vio_metric == "Balance %" else "Accounts % change"
+        st.subheader(f"{_vio_label} distribution by communication")
         st.caption(
-            "🎻 **Violin chart** — shows the full spread of individual balance changes, "
+            "🎻 **Violin chart** — shows the full spread of individual % changes, "
             "not just the average. A wide violin = high variability, meaning the average is driven by "
             "a few extreme responders. A narrow violin = consistent response across all customers. "
             "Use this to identify segments where the average is misleading."
@@ -1047,16 +1135,16 @@ with tab_charts:
             dv = df[
                 (df["Contact_flag"] == 1) & (df["nsegment"].isin(seg_pick))
                 & (df["Communication"].isin(ordered_comms))
-            ].dropna(subset=["balance_pct_change"])
+            ].dropna(subset=[_vio_col])
             if not dv.empty:
                 dv = dv.copy()
                 dv["_label"] = dv["nsegment"].astype(str)
                 fig_v = px.violin(
-                    dv, x="Communication", y="balance_pct_change",
+                    dv, x="Communication", y=_vio_col,
                     color="_label", box=True, points=False,
                     category_orders={"Communication": ordered_comms},
-                    labels={"balance_pct_change": "Balance % change", "_label": "Segment"},
-                    title="Balance % change distribution per communication",
+                    labels={_vio_col: _vio_label, "_label": "Segment"},
+                    title=f"{_vio_label} distribution per communication",
                 )
                 fig_v.update_yaxes(tickformat=".0%")
                 st.plotly_chart(fig_v, use_container_width=True)
@@ -1136,20 +1224,21 @@ with tab_simulator:
         all_segs_sim = sorted(tbl.index.astype(str).tolist())
         _default_sim = all_segs_sim[:min(10, len(all_segs_sim))]
 
-        sim_segs = st.multiselect(
-            "Segments to include in the simulation",
-            options=all_segs_sim,
-            default=_default_sim,
-            format_func=lambda x: f"{x}  —  {SEGMENT_LABELS.get(x, x)}" if SEGMENT_LABELS.get(x) else x,
-            key="sim_segs",
-        )
-
-        sim_metric = st.radio(
-            "Metric",
-            ["Balance % lift", "Accounts % lift"],
-            horizontal=True,
-            key="sim_metric",
-        )
+        _sc1, _sc2 = st.columns([3, 1])
+        with _sc1:
+            sim_segs = st.multiselect(
+                "Segments to include in the simulation",
+                options=all_segs_sim,
+                default=_default_sim,
+                format_func=lambda x: f"{x}  —  {SEGMENT_LABELS.get(x, x)}" if SEGMENT_LABELS.get(x) else x,
+                key="sim_segs",
+            )
+        with _sc2:
+            sim_metric = st.radio(
+                "Metric",
+                ["Balance % lift", "Accounts % lift"],
+                key="sim_metric",
+            )
         _lift_suffix = "_lift_bal" if sim_metric == "Balance % lift" else "_lift_acct"
         _raw_suffix  = "_bal"      if sim_metric == "Balance % lift" else "_acct"
         _y_label     = "Expected Balance Lift %" if sim_metric == "Balance % lift" else "Expected Accounts Lift %"
@@ -1257,61 +1346,48 @@ with tab_simulator:
 
             st.divider()
 
-            # Bar chart
-            plot_df = sim_summary.dropna(subset=["Expected Lift"])
-            if not plot_df.empty:
-                fig_sim = px.bar(
-                    plot_df,
-                    x="Communication",
-                    y="Expected Lift",
-                    color="Expected Lift",
-                    color_continuous_scale="RdYlGn",
-                    text=plot_df["Expected Lift"].map(lambda v: f"{v:.2%}"),
-                    custom_data=["Total N", "Treatment Avg"],
-                    category_orders={"Communication": ordered_comms},
-                    title=f"{_y_label} per communication — {len(sim_segs)} segment(s) selected",
-                    labels={"Expected Lift": _y_label},
-                )
-                fig_sim.update_traces(
-                    textposition="outside",
-                    hovertemplate="<b>%{x}</b><br>Lift: %{y:.2%}<br>Treatment avg: %{customdata[1]:.2%}<br>N: %{customdata[0]:,}<extra></extra>",
-                )
-                fig_sim.update_yaxes(tickformat=".1%", title=_y_label)
-                fig_sim.update_layout(coloraxis_showscale=False, height=420)
-                st.plotly_chart(fig_sim, use_container_width=True)
-
-            st.divider()
-
             # ── Per-segment detail table ──────────────────────────────────────
             st.markdown("#### Per-segment breakdown")
             st.caption(
                 "Each cell shows the lift (treatment − control) for that segment × communication. "
                 "Blank = no control data for that combination or fewer users than the minimum N filter."
             )
-            detail_lift_cols = [f"{c}{_lift_suffix}" for c in ordered_comms if f"{c}{_lift_suffix}" in tbl.columns]
-            detail_n_cols    = [f"{c}_n"             for c in ordered_comms if f"{c}_n"             in tbl.columns]
-            detail_all_cols  = detail_lift_cols + detail_n_cols
-
-            detail = tbl.loc[tbl.index.isin(sim_segs), [c for c in detail_all_cols if c in tbl.columns]].copy()
+            # Interleave lift + N columns: day1, day1 N, day5, day5 N, ...
+            _intl_cols = []
+            for c in ordered_comms:
+                if f"{c}{_lift_suffix}" in tbl.columns:
+                    _intl_cols.append(f"{c}{_lift_suffix}")
+                if f"{c}_n" in tbl.columns:
+                    _intl_cols.append(f"{c}_n")
+            detail = tbl.loc[tbl.index.isin(sim_segs), [c for c in _intl_cols if c in tbl.columns]].copy()
             detail.index.name = "Segment"
 
             col_rename_sim = {f"{c}{_lift_suffix}": c for c in ordered_comms}
             col_rename_sim.update({f"{c}_n": f"{c} N" for c in ordered_comms})
             detail = detail.rename(columns=col_rename_sim)
 
-            pct_fmt = {c: "{:.2%}" for c in ordered_comms if c in detail.columns}
+            def _pct_fmt_sim(v):
+                if pd.isna(v): return ""
+                pct = v * 100
+                return f"{pct:.1f}%" if abs(pct) < 1.0 else f"{pct:.0f}%"
+
+            pct_fmt = {c: _pct_fmt_sim for c in ordered_comms if c in detail.columns}
             n_fmt   = {f"{c} N": "{:,.0f}" for c in ordered_comms if f"{c} N" in detail.columns}
             fmt_all = {**pct_fmt, **n_fmt}
 
             def _lift_color(col_series):
                 return col_series.map(_rdylgn)
 
+            def _n_color_sim(col_series):
+                return col_series.map(_n_color)
+
             lift_disp_cols = [c for c in ordered_comms if c in detail.columns]
-            styler_sim = (
-                detail.style
-                .format(fmt_all, na_rep="")
-                .apply(_lift_color, subset=lift_disp_cols, axis=0)
-            )
+            n_disp_cols    = [f"{c} N" for c in ordered_comms if f"{c} N" in detail.columns]
+            styler_sim = detail.style.format(fmt_all, na_rep="")
+            if lift_disp_cols:
+                styler_sim = styler_sim.apply(_lift_color, subset=lift_disp_cols, axis=0)
+            if n_disp_cols:
+                styler_sim = styler_sim.apply(_n_color_sim, subset=n_disp_cols, axis=0)
             st.dataframe(styler_sim, use_container_width=True)
         else:
             st.info("Select at least one segment above to run the simulation.")
