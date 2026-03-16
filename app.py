@@ -139,6 +139,29 @@ def _ci95(vals: pd.Series, weights: pd.Series) -> float:
     return float(Z95 * np.sqrt(wvar / n))
 
 
+def _se(vals: pd.Series, weights: pd.Series) -> float:
+    """Weighted standard error of the mean (= ci95 / Z95)."""
+    mask = vals.notna()
+    v = vals[mask].to_numpy(dtype=float)
+    w = weights[mask].to_numpy(dtype=float)
+    n = len(v)
+    if n < 2 or w.sum() == 0:
+        return np.nan
+    wm = float(np.average(v, weights=w))
+    wvar = float(np.average((v - wm) ** 2, weights=w)) * n / (n - 1)
+    return float(np.sqrt(wvar / n))
+
+
+@st.cache_data(show_spinner=False)
+def _all_segment_ids(df_raw: pd.DataFrame) -> List[str]:
+    segs: set = set()
+    for v in df_raw["nsegments"]:
+        for s in _try_parse_listlike(v):
+            if s and s != "__NO_SEGMENT__":
+                segs.add(s)
+    return sorted(segs)
+
+
 # ── Aggregation ───────────────────────────────────────────────────────────────
 @st.cache_data(show_spinner=False)
 def agg_cols_data(
@@ -149,7 +172,7 @@ def agg_cols_data(
     acct_min: float,
     bal_baseline_min: Optional[float],
 ) -> pd.DataFrame:
-    EMPTY = pd.DataFrame(columns=["nsegment", "agg_bal", "agg_bal_ci", "agg_acct", "agg_acct_ci", "agg_lift_bal", "agg_lift_acct", "agg_n"])
+    EMPTY = pd.DataFrame(columns=["nsegment", "agg_bal", "agg_bal_ci", "agg_acct", "agg_acct_ci", "agg_lift_bal", "agg_lift_bal_ci", "agg_lift_acct", "agg_lift_acct_ci", "agg_n"])
     if not selected:
         return EMPTY
     treated = df[(df["Contact_flag"] == 1) & (df["Communication"].isin(list(selected)))].copy()
@@ -190,16 +213,23 @@ def agg_cols_data(
         ca  = _wmean(ctrl_grp["accounts_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
         lift_b = (mb - cb) if not np.isnan(mb) and not np.isnan(cb) else np.nan
         lift_a = (ma - ca) if not np.isnan(ma) and not np.isnan(ca) else np.nan
+        se_b  = _se(grp["balance_pct_change"], w)
+        se_cb = _se(ctrl_grp["balance_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
+        se_a  = _se(grp["accounts_pct_change"], w)
+        se_ca = _se(ctrl_grp["accounts_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
+        lift_b_ci = float(Z95 * np.sqrt(se_b**2 + se_cb**2)) if not (np.isnan(se_b) or np.isnan(se_cb)) else np.nan
+        lift_a_ci = float(Z95 * np.sqrt(se_a**2 + se_ca**2)) if not (np.isnan(se_a) or np.isnan(se_ca)) else np.nan
 
         rows.append({"nsegment": seg, "agg_bal": mb, "agg_bal_ci": cib,
                      "agg_acct": ma, "agg_acct_ci": cia,
-                     "agg_lift_bal": lift_b, "agg_lift_acct": lift_a, "agg_n": n})
+                     "agg_lift_bal": lift_b, "agg_lift_bal_ci": lift_b_ci,
+                     "agg_lift_acct": lift_a, "agg_lift_acct_ci": lift_a_ci, "agg_n": n})
     return pd.DataFrame(rows) if rows else EMPTY
 
 
 @st.cache_data(show_spinner=False)
 def comm_data(df: pd.DataFrame, comm: str, bal_min: float, acct_min: float) -> pd.DataFrame:
-    EMPTY = pd.DataFrame(columns=["nsegment", f"{comm}_bal", f"{comm}_bal_ci", f"{comm}_acct", f"{comm}_acct_ci", f"{comm}_n", f"{comm}_lift_bal", f"{comm}_lift_acct"])
+    EMPTY = pd.DataFrame(columns=["nsegment", f"{comm}_bal", f"{comm}_bal_ci", f"{comm}_acct", f"{comm}_acct_ci", f"{comm}_n", f"{comm}_lift_bal", f"{comm}_lift_bal_ci", f"{comm}_lift_acct", f"{comm}_lift_acct_ci"])
     treated = df[(df["Contact_flag"] == 1) & (df["Communication"] == comm)].copy()
     control = df[(df["control_flag"] == 1) & (df["Communication"] == comm)].copy()
     treated = treated[treated["balance_pct_change"].fillna(-np.inf)  >= bal_min]
@@ -219,9 +249,16 @@ def comm_data(df: pd.DataFrame, comm: str, bal_min: float, acct_min: float) -> p
         ca = _wmean(ctrl_grp["accounts_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
         lift_b = (mb - cb) if not (np.isnan(mb) or np.isnan(cb)) else np.nan
         lift_a = (ma - ca) if not (np.isnan(ma) or np.isnan(ca)) else np.nan
+        se_b  = _se(grp["balance_pct_change"], w)
+        se_cb = _se(ctrl_grp["balance_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
+        se_a  = _se(grp["accounts_pct_change"], w)
+        se_ca = _se(ctrl_grp["accounts_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
+        lift_b_ci = float(Z95 * np.sqrt(se_b**2 + se_cb**2)) if not (np.isnan(se_b) or np.isnan(se_cb)) else np.nan
+        lift_a_ci = float(Z95 * np.sqrt(se_a**2 + se_ca**2)) if not (np.isnan(se_a) or np.isnan(se_ca)) else np.nan
         rows.append({"nsegment": seg, f"{comm}_bal": mb, f"{comm}_bal_ci": cib,
                      f"{comm}_acct": ma, f"{comm}_acct_ci": cia, f"{comm}_n": n,
-                     f"{comm}_lift_bal": lift_b, f"{comm}_lift_acct": lift_a})
+                     f"{comm}_lift_bal": lift_b, f"{comm}_lift_bal_ci": lift_b_ci,
+                     f"{comm}_lift_acct": lift_a, f"{comm}_lift_acct_ci": lift_a_ci})
     return pd.DataFrame(rows) if rows else EMPTY
 
 
@@ -240,7 +277,8 @@ def build_table(
     tbl = base.merge(a, on="nsegment", how="left")
     if "agg_n" in tbl.columns:
         mask = tbl["agg_n"].fillna(0) < min_n
-        for col in ["agg_bal", "agg_bal_ci", "agg_acct", "agg_acct_ci", "agg_lift_bal", "agg_lift_acct"]:
+        for col in ["agg_bal", "agg_bal_ci", "agg_acct", "agg_acct_ci",
+                    "agg_lift_bal", "agg_lift_bal_ci", "agg_lift_acct", "agg_lift_acct_ci"]:
             if col in tbl.columns:
                 tbl.loc[mask, col] = np.nan
     for comm in ordered_comms:
@@ -249,7 +287,9 @@ def build_table(
         nc = f"{comm}_n"
         if nc in tbl.columns:
             mask = tbl[nc].fillna(0) < min_n
-            for col in [f"{comm}_bal", f"{comm}_bal_ci", f"{comm}_acct", f"{comm}_acct_ci", f"{comm}_lift_bal", f"{comm}_lift_acct"]:
+            for col in [f"{comm}_bal", f"{comm}_bal_ci", f"{comm}_acct", f"{comm}_acct_ci",
+                        f"{comm}_lift_bal", f"{comm}_lift_bal_ci",
+                        f"{comm}_lift_acct", f"{comm}_lift_acct_ci"]:
                 if col in tbl.columns:
                     tbl.loc[mask, col] = np.nan
     metric_cols = [c for c in tbl.columns if c != "nsegment" and not c.endswith("_n")]
@@ -290,41 +330,47 @@ def style_tbl(
 
     # Build column rename map
     rename = {
-        "agg_bal":       "Bal%\u0394 (agg)",
-        "agg_bal_ci":    "\u00b1CI Bal (agg)",
-        "agg_acct":      "Acct%\u0394 (agg)",
-        "agg_acct_ci":   "\u00b1CI Acct (agg)",
-        "agg_lift_bal":  "Lift Bal (agg)",
-        "agg_lift_acct": "Lift Acct (agg)",
-        "agg_n":         "N (agg)",
+        "agg_bal":            "Bal%\u0394 (agg)",
+        "agg_bal_ci":         "\u00b1CI Bal (agg)",
+        "agg_acct":           "Acct%\u0394 (agg)",
+        "agg_acct_ci":        "\u00b1CI Acct (agg)",
+        "agg_lift_bal":       "Lift Bal (agg)",
+        "agg_lift_bal_ci":    "\u00b1CI Lift Bal (agg)",
+        "agg_lift_acct":      "Lift Acct (agg)",
+        "agg_lift_acct_ci":   "\u00b1CI Lift Acct (agg)",
+        "agg_n":              "N (agg)",
     }
     for c in ordered_comms:
-        rename[f"{c}_bal"]    = f"{c} Bal%"
-        rename[f"{c}_bal_ci"] = f"{c} \u00b1CI"
-        rename[f"{c}_acct"]   = f"{c} Acct%"
-        rename[f"{c}_acct_ci"]= f"{c} \u00b1CI Acct"
-        rename[f"{c}_n"]          = f"{c} N"
-        rename[f"{c}_lift_bal"]   = f"{c} Lift Bal"
-        rename[f"{c}_lift_acct"]  = f"{c} Lift Acct"
+        rename[f"{c}_bal"]          = f"{c} Bal%"
+        rename[f"{c}_bal_ci"]       = f"{c} \u00b1CI"
+        rename[f"{c}_acct"]         = f"{c} Acct%"
+        rename[f"{c}_acct_ci"]      = f"{c} \u00b1CI Acct"
+        rename[f"{c}_n"]            = f"{c} N"
+        rename[f"{c}_lift_bal"]     = f"{c} Lift Bal"
+        rename[f"{c}_lift_bal_ci"]  = f"{c} \u00b1CI Lift Bal"
+        rename[f"{c}_lift_acct"]    = f"{c} Lift Acct"
+        rename[f"{c}_lift_acct_ci"] = f"{c} \u00b1CI Lift Acct"
     disp = disp.rename(columns=rename)
 
     # Drop columns based on toggles
     drop_cols = []
     # Always drop aggregate columns from table (still available in tbl for charts)
-    _agg_keys = {"agg_bal", "agg_bal_ci", "agg_acct", "agg_acct_ci", "agg_lift_bal", "agg_lift_acct", "agg_n"}
+    _agg_keys = {"agg_bal", "agg_bal_ci", "agg_acct", "agg_acct_ci",
+                 "agg_lift_bal", "agg_lift_bal_ci", "agg_lift_acct", "agg_lift_acct_ci", "agg_n"}
     drop_cols += [v for k, v in rename.items() if k in _agg_keys and v in disp.columns]
     if not show_n_cols:
         drop_cols += [v for k, v in rename.items() if k.endswith("_n") and v in disp.columns]
-    # Always drop CI from table (CI data stays in tbl DataFrame for chart error bars)
-    drop_cols += [v for k, v in rename.items() if ("_ci" in k) and v in disp.columns]
+    # Drop raw-% CI from table (not lift CI — that's shown when show_lift=True)
+    drop_cols += [v for k, v in rename.items()
+                  if ("_ci" in k) and "_lift" not in k and v in disp.columns]
     # Lift is an exclusive mode: show lift columns OR raw % columns, never both
     if show_lift:
-        # drop per-comm raw % columns; keep per-comm lift columns
+        # drop per-comm raw % columns; keep per-comm lift + lift CI columns
         drop_cols += [v for k, v in rename.items()
                       if v in disp.columns and "_ci" not in k and "_lift" not in k
                       and (k.endswith("_bal") or k.endswith("_acct"))]
     else:
-        # drop per-comm lift columns; show raw % columns
+        # drop per-comm lift columns (including lift CI); show raw % columns
         drop_cols += [v for k, v in rename.items() if ("_lift" in k) and v in disp.columns]
     disp = disp.drop(columns=[c for c in drop_cols if c in disp.columns])
 
@@ -339,13 +385,51 @@ def style_tbl(
     def _colour_col(col_series: pd.Series) -> pd.Series:
         return col_series.map(_rdylgn)
 
-    colour_cols = [v for k, v in rename.items()
-                   if (k.endswith("_bal") or k.endswith("_acct") or k in ("agg_bal", "agg_acct") or "_lift" in k)
-                   and v in disp.columns]
+    # Colour lift columns with significance awareness (muted when CI crosses 0)
+    lift_val_cols = [v for k, v in rename.items()
+                     if ("_lift" in k) and "_ci" not in k and v in disp.columns]
+    lift_ci_map   = {}  # display-name lift col → display-name CI col
+    for k, v in rename.items():
+        if "_lift" in k and "_ci" not in k and v in disp.columns:
+            ci_key = k + "_ci"
+            ci_v   = rename.get(ci_key, "")
+            if ci_v in disp.columns:
+                lift_ci_map[v] = ci_v
+
+    plain_colour_cols = [v for k, v in rename.items()
+                         if (k.endswith("_bal") or k.endswith("_acct")
+                             or k in ("agg_bal", "agg_acct"))
+                         and "_lift" not in k and "_ci" not in k
+                         and v in disp.columns]
 
     styler = disp.style.format(fmt, na_rep="")
-    if colour_cols:
-        styler = styler.apply(_colour_col, subset=colour_cols, axis=0)
+    if plain_colour_cols:
+        styler = styler.apply(_colour_col, subset=plain_colour_cols, axis=0)
+    # Significance-aware coloring for lift columns
+    def _make_lift_styler(lv_c, ci_c):
+        def _f(sub_df):
+            out = pd.DataFrame("", index=sub_df.index, columns=sub_df.columns)
+            for idx in sub_df.index:
+                lv = sub_df.loc[idx, lv_c]
+                cv = sub_df.loc[idx, ci_c]
+                if pd.isna(lv):
+                    s = ""
+                elif pd.isna(cv):
+                    s = _rdylgn(lv)
+                else:
+                    is_sig = (lv - cv) > 0 or (lv + cv) < 0
+                    base   = _rdylgn(lv)
+                    s      = base if is_sig else base.replace("0.55", "0.20")
+                out.loc[idx, lv_c] = s
+            return out
+        return _f
+    for lv_col, ci_col in lift_ci_map.items():
+        styler = styler.apply(_make_lift_styler(lv_col, ci_col),
+                              subset=[lv_col, ci_col], axis=None)
+    # Lift value columns without a matching CI column (plain coloring)
+    plain_lift_cols = [v for v in lift_val_cols if v not in lift_ci_map]
+    if plain_lift_cols:
+        styler = styler.apply(_colour_col, subset=plain_lift_cols, axis=0)
     if n_cols:
         styler = styler.apply(lambda s: s.map(_n_color), subset=n_cols, axis=0)
 
@@ -522,24 +606,23 @@ if missing_cols:
 # ── Sidebar ───────────────────────────────────────────────────────────────────
 with st.sidebar:
     # ── Segment lookup ────────────────────────────────────────────────────
-    if SEGMENT_LABELS or SEGMENT_DESCRIPTIONS:
-        st.subheader("🔍 Segment Lookup")
-        _lookup_id = st.text_input("Segment ID", placeholder="e.g. 1000001", key="seg_lookup")
-        if _lookup_id.strip():
-            _lid  = _lookup_id.strip()
-            _lbl  = SEGMENT_LABELS.get(_lid, "")
-            _desc = SEGMENT_DESCRIPTIONS.get(_lid, "")
-            if _lbl or _desc:
-                if _lbl:
-                    st.markdown(f"**{_lbl}**")
-                if _desc:
-                    st.caption(_desc)
-            else:
-                st.caption("No description found for this segment ID.")
-        st.divider()
+    _seg_ids = _all_segment_ids(df_raw)
+    _lookup_id = st.selectbox(
+        "🔍 Segment Lookup",
+        options=[""] + _seg_ids,
+        index=0,
+        key="seg_lookup",
+        help="Type to filter segment IDs",
+    )
+    if _lookup_id:
+        _desc = SEGMENT_DESCRIPTIONS.get(_lookup_id, "")
+        if _desc:
+            st.caption(_desc)
+        else:
+            st.caption("No description available for this segment.")
+    st.divider()
 
     st.header("Filters")
-    selected_comms = st.multiselect("Communications", options=COMM_ORDER, default=COMM_ORDER)
 
     st.divider()
     st.subheader("Date range")
@@ -601,9 +684,16 @@ df = preprocess(
     bal_clip_pct=float(bal_clip_pct),
 )
 
+# ── Communications selector (compact checkbox strip) ─────────────────────────
+_all_present_comms = [c for c in COMM_ORDER if c in df["Communication"].unique()]
+_cc = st.columns(len(_all_present_comms))
+selected_comms = [
+    c for i, c in enumerate(_all_present_comms)
+    if _cc[i].checkbox(c, value=True, key=f"cb_{c}")
+]
 ordered_comms = [c for c in COMM_ORDER if c in selected_comms]
 if not ordered_comms:
-    st.info("Select at least one communication in the sidebar.")
+    st.info("Select at least one communication above.")
     st.stop()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
@@ -628,12 +718,16 @@ with tab_table:
     else:
         html_tbl = style_tbl(
             tbl, ordered_comms,
-            seg_labels=SEGMENT_LABELS or None,
-            seg_desc=SEGMENT_DESCRIPTIONS or None,
             show_n_cols=show_n_cols,
             show_lift=show_lift,
         )
         components.html(html_tbl, height=680, scrolling=True)
+        if show_lift:
+            st.caption(
+                "🟢 **Strong color** = lift 95% CI does not cross zero (statistically significant).  "
+                "🟡 **Muted color** = CI crosses zero (direction not reliable at 95% level).  "
+                "The **\u00b1CI Lift** column shows the half-width of the 95% confidence interval."
+            )
 
 
 # ══════════════════════════════════════════════════════════
