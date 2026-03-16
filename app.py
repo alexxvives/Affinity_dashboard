@@ -626,9 +626,10 @@ if not ordered_comms:
     st.stop()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_table, tab_charts, tab_export, tab_audit = st.tabs([
+tab_table, tab_charts, tab_simulator, tab_export, tab_audit = st.tabs([
     "📊  Table",
     "📈  Charts",
+    "🎯  Targeting Simulator",
     "⬇  Export",
     "🔍  Audit",
 ])
@@ -929,6 +930,155 @@ with tab_charts:
                         fig_dist.update_xaxes(tickformat=".0%")
                     fig_dist.update_layout(height=480)
                     st.plotly_chart(fig_dist, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════
+# TARGETING SIMULATOR TAB
+# ══════════════════════════════════════════════════════════
+with tab_simulator:
+    st.subheader("🎯 Targeting Simulator")
+    st.caption(
+        "Select any set of segments below and we'll estimate the **expected balance lift per "
+        "communication** if you sent to only those customers. "
+        "Lift is N-weighted across your chosen segments: segments with more users carry more weight."
+    )
+
+    if "tbl" not in dir() or tbl.empty:
+        st.warning("No table data — adjust filters in the Table tab first.")
+    else:
+        all_segs_sim = sorted(tbl.index.astype(str).tolist())
+        _default_sim = all_segs_sim[:min(10, len(all_segs_sim))]
+
+        sim_segs = st.multiselect(
+            "Segments to include in the simulation",
+            options=all_segs_sim,
+            default=_default_sim,
+            format_func=lambda x: f"{x}  —  {SEGMENT_LABELS.get(x, x)}" if SEGMENT_LABELS.get(x) else x,
+            key="sim_segs",
+        )
+
+        sim_metric = st.radio(
+            "Metric",
+            ["Balance % lift", "Accounts % lift"],
+            horizontal=True,
+            key="sim_metric",
+        )
+        _lift_suffix = "_lift_bal" if sim_metric == "Balance % lift" else "_lift_acct"
+        _raw_suffix  = "_bal"      if sim_metric == "Balance % lift" else "_acct"
+        _y_label     = "Expected Balance Lift %" if sim_metric == "Balance % lift" else "Expected Accounts Lift %"
+
+        if sim_segs:
+            # ── Summary bar: N-weighted avg lift per communication ────────────
+            sim_summary_rows = []
+            for comm in ordered_comms:
+                lift_col = f"{comm}{_lift_suffix}"
+                raw_col  = f"{comm}{_raw_suffix}"
+                n_col    = f"{comm}_n"
+                if n_col not in tbl.columns:
+                    continue
+                sub = tbl.loc[tbl.index.isin(sim_segs), [c for c in [lift_col, raw_col, n_col] if c in tbl.columns]].copy()
+                n_vals = sub[n_col].fillna(0)
+                total_n = int(n_vals.sum())
+
+                # Weighted lift (prefer lift if available, fall back to raw treatment avg)
+                if lift_col in sub.columns:
+                    valid = sub[lift_col].notna()
+                    w_lift = float((sub.loc[valid, lift_col] * n_vals[valid]).sum() / n_vals[valid].sum()) if n_vals[valid].sum() > 0 else np.nan
+                else:
+                    w_lift = np.nan
+
+                if raw_col in sub.columns:
+                    valid_r = sub[raw_col].notna()
+                    w_raw = float((sub.loc[valid_r, raw_col] * n_vals[valid_r]).sum() / n_vals[valid_r].sum()) if n_vals[valid_r].sum() > 0 else np.nan
+                else:
+                    w_raw = np.nan
+
+                sim_summary_rows.append({
+                    "Communication":  comm,
+                    "Expected Lift":  w_lift,
+                    "Treatment Avg":  w_raw,
+                    "Total N":        total_n,
+                    "_rank":          _rank(comm),
+                })
+
+            sim_summary = (pd.DataFrame(sim_summary_rows)
+                           .sort_values("_rank")
+                           .drop(columns="_rank")
+                           .reset_index(drop=True))
+
+            # Show kpi metrics row
+            st.markdown("#### Expected lift across selected segments")
+            kpi_cols = st.columns(len(sim_summary))
+            for i, row in sim_summary.iterrows():
+                lift_val = row["Expected Lift"]
+                label    = row["Communication"]
+                n_val    = int(row["Total N"]) if pd.notna(row["Total N"]) else 0
+                delta_str = f"N = {n_val:,}"
+                if pd.notna(lift_val):
+                    kpi_cols[i].metric(label, f"{lift_val:.2%}", delta_str)
+                else:
+                    kpi_cols[i].metric(label, "—", delta_str)
+
+            st.divider()
+
+            # Bar chart
+            plot_df = sim_summary.dropna(subset=["Expected Lift"])
+            if not plot_df.empty:
+                fig_sim = px.bar(
+                    plot_df,
+                    x="Communication",
+                    y="Expected Lift",
+                    color="Expected Lift",
+                    color_continuous_scale="RdYlGn",
+                    text=plot_df["Expected Lift"].map(lambda v: f"{v:.2%}"),
+                    custom_data=["Total N", "Treatment Avg"],
+                    category_orders={"Communication": ordered_comms},
+                    title=f"{_y_label} per communication — {len(sim_segs)} segment(s) selected",
+                    labels={"Expected Lift": _y_label},
+                )
+                fig_sim.update_traces(
+                    textposition="outside",
+                    hovertemplate="<b>%{x}</b><br>Lift: %{y:.2%}<br>Treatment avg: %{customdata[1]:.2%}<br>N: %{customdata[0]:,}<extra></extra>",
+                )
+                fig_sim.update_yaxes(tickformat=".1%", title=_y_label)
+                fig_sim.update_layout(coloraxis_showscale=False, height=420)
+                st.plotly_chart(fig_sim, use_container_width=True)
+
+            st.divider()
+
+            # ── Per-segment detail table ──────────────────────────────────────
+            st.markdown("#### Per-segment breakdown")
+            st.caption(
+                "Each cell shows the lift (treatment − control) for that segment × communication. "
+                "Blank = no control data for that combination or fewer users than the minimum N filter."
+            )
+            detail_lift_cols = [f"{c}{_lift_suffix}" for c in ordered_comms if f"{c}{_lift_suffix}" in tbl.columns]
+            detail_n_cols    = [f"{c}_n"             for c in ordered_comms if f"{c}_n"             in tbl.columns]
+            detail_all_cols  = detail_lift_cols + detail_n_cols
+
+            detail = tbl.loc[tbl.index.isin(sim_segs), [c for c in detail_all_cols if c in tbl.columns]].copy()
+            detail.index.name = "Segment"
+
+            col_rename_sim = {f"{c}{_lift_suffix}": c for c in ordered_comms}
+            col_rename_sim.update({f"{c}_n": f"{c} N" for c in ordered_comms})
+            detail = detail.rename(columns=col_rename_sim)
+
+            pct_fmt = {c: "{:.2%}" for c in ordered_comms if c in detail.columns}
+            n_fmt   = {f"{c} N": "{:,.0f}" for c in ordered_comms if f"{c} N" in detail.columns}
+            fmt_all = {**pct_fmt, **n_fmt}
+
+            def _lift_color(col_series):
+                return col_series.map(_rdylgn)
+
+            lift_disp_cols = [c for c in ordered_comms if c in detail.columns]
+            styler_sim = (
+                detail.style
+                .format(fmt_all, na_rep="")
+                .apply(_lift_color, subset=lift_disp_cols, axis=0)
+            )
+            st.dataframe(styler_sim, use_container_width=True)
+        else:
+            st.info("Select at least one segment above to run the simulation.")
 
 
 # ══════════════════════════════════════════════════════════
