@@ -504,7 +504,7 @@ def style_tbl(
             if not tip:
                 return m.group(0)
             safe = tip.replace('"', "'")
-            return f'{tag_pre} title="{safe}">{cell_val}</th>'
+            return f'{tag_pre} data-tip="{safe}">{cell_val}</th>'
         table_html = _re.sub(
             r'(<th[^>]*class="[^"]*row_heading[^"]*"[^>]*)>([^<]*)</th>',
             _inject_tooltip, table_html,
@@ -524,7 +524,7 @@ def style_tbl(
   tbody td {{ padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; }}
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
-                    color: #aaa !important; font-weight: normal; }}
+                    color: #aaa !important; font-weight: normal; cursor: help; }}
   th.blank {{ background: #262730 !important; }}
 </style></head>
 <body><div style="overflow:auto; max-height: 615px;">
@@ -1007,7 +1007,7 @@ with tab_charts:
         st.warning("No table data — adjust filters in the Table tab.")
     else:
         st.caption(
-            "📊 **Top segments bar chart** — ranks segments by the selected metric. "
+            "**Top segments bar chart** — ranks segments by the selected metric. "
             "Taller bars = stronger average effect for that communication. "
             "Use this to decide which segments to prioritise in the next campaign wave. "
             "Error bars (where shown) are 95% confidence intervals — wider bars mean less certainty."
@@ -1056,7 +1056,11 @@ with tab_charts:
                 hovertemplate="<b>%{x}</b>: %{y:.1f}%<br><span style='color:#aaa'>%{customdata}</span><extra></extra>",
             )
             fig_bar.update_layout(coloraxis_showscale=False, xaxis_tickangle=-45, height=480)
-            fig_bar.update_xaxes(type="category")
+            fig_bar.update_xaxes(
+                type="category",
+                tickvals=x_labels,
+                ticktext=[f"{x}  ·  {SEGMENT_LABELS[x]}" if SEGMENT_LABELS.get(x) else x for x in x_labels],
+            )
             fig_bar.update_yaxes(ticksuffix="%")
             st.plotly_chart(fig_bar, use_container_width=True)
         else:
@@ -1070,7 +1074,7 @@ with tab_charts:
         _hm_label  = "Bal% Δ" if _hm_metric == "Balance %" else "Acct% Δ"
         st.subheader(f"{_hm_label} — segment × communication")
         st.caption(
-            "🟩 **Heatmap** — each cell is the avg % change for a segment (row) "
+            "**Heatmap** — each cell is the avg % change for a segment (row) "
             "at a single communication touchpoint (column). Darker green = stronger positive response. "
             "Use this to spot which communications resonate with which segments, and identify "
             "segments that respond early vs late in the journey."
@@ -1100,7 +1104,11 @@ with tab_charts:
                 customdata=_hm_custom,
                 hovertemplate="%{customdata}<br>Comm: %{x} → %{z:.1f}%<extra></extra>",
             )
-            fig_hm.update_yaxes(type="category", autorange="reversed")
+            fig_hm.update_yaxes(
+                type="category", autorange="reversed",
+                tickvals=list(hm.index),
+                ticktext=[f"{s}  ·  {SEGMENT_LABELS[s]}" if SEGMENT_LABELS.get(s) else str(s) for s in hm.index],
+            )
             fig_hm.update_xaxes(type="category")
             fig_hm.update_layout(height=max(420, len(hm) * 14 + 100))
             st.plotly_chart(fig_hm, use_container_width=True)
@@ -1108,9 +1116,9 @@ with tab_charts:
         st.divider()
 
         # ── Journey timeline ─────────────────────────────────────────────────
-        st.subheader("🗺️ Journey Timeline — avg % change at each touchpoint")
+        st.subheader("Journey Timeline — avg % change at each touchpoint")
         st.caption(
-            "📈 **Journey timeline** — tracks how selected segments perform at each "
+            "**Journey timeline** — tracks how selected segments perform at each "
             "communication touchpoint. Rising lines = improving engagement over the journey. "
             "Flat or falling lines suggest fatigue or declining relevance at that stage. "
             "Useful for optimising send timing and dropping ineffective touchpoints."
@@ -1166,9 +1174,9 @@ with tab_charts:
         st.divider()
 
         # ── Segment co-occurrence heatmap ────────────────────────────────────
-        st.subheader("🔗 Segment Co-occurrence — how often segments share the same user")
+        st.subheader("Segment Co-occurrence — how often segments share the same user")
         st.caption(
-            "🧩 **Co-occurrence heatmap** — cell [A, B] = fraction of segment A users "
+            "**Co-occurrence heatmap** — cell [A, B] = fraction of segment A users "
             "who are also in segment B. Dark blue = heavy overlap. "
             "If two high-performing segments overlap heavily, targeting both wastes budget — "
             "pick the one with stronger lift. Also useful for building exclusion lists."
@@ -1179,10 +1187,14 @@ with tab_charts:
         if len(top_segs_cooc) < 2:
             st.info("Not enough segments with data to compute co-occurrence. Adjust filters.")
         else:
-            _cooc_min = min(5, len(top_segs_cooc))
-            _cooc_max = min(50, len(top_segs_cooc))
-            _cooc_def = min(20, _cooc_max)
-            cooc_n = st.slider("Top N segments to include", _cooc_min, _cooc_max, _cooc_def, key="cooc_n")
+            _cooc_max = len(top_segs_cooc)
+            if _cooc_max <= 2:
+                cooc_n = _cooc_max
+            else:
+                _cooc_def = min(20, _cooc_max)
+                if "cooc_n" in st.session_state:
+                    st.session_state["cooc_n"] = max(2, min(int(st.session_state["cooc_n"]), _cooc_max))
+                cooc_n = st.slider("Top N segments to include", 2, _cooc_max, _cooc_def, key="cooc_n")
             cooc_segs = top_segs_cooc[:cooc_n]
 
             user_seg_df = (
@@ -1237,7 +1249,7 @@ with tab_charts:
         _vio_label  = "Balance % change"   if _vio_metric == "Balance %" else "Accounts % change"
         st.subheader(f"{_vio_label} distribution by communication")
         st.caption(
-            "🎻 **Violin chart** — shows the full spread of individual % changes, "
+            "**Violin chart** — shows the full spread of individual % changes, "
             "not just the average. A wide violin = high variability, meaning the average is driven by "
             "a few extreme responders. A narrow violin = consistent response across all customers. "
             "Use this to identify segments where the average is misleading."
@@ -1272,7 +1284,7 @@ with tab_charts:
         # ── Distribution explorer ────────────────────────────────────────────
         st.subheader("Distribution explorer — KDE density")
         st.caption(
-            "🔍 **Distribution explorer** — smoothed KDE density curve for any "
+            "**Distribution explorer** — smoothed KDE density curve for any "
             "combination of segments and communication. Use this to compare the shape of responses "
             "side by side: overlapping peaks = similar behaviour; separated peaks = meaningfully "
             "different customer groups. Segmentation is only useful if groups behave differently."
@@ -1526,37 +1538,124 @@ with tab_simulator:
 # EXPORT TAB
 # ══════════════════════════════════════════════════════════
 with tab_export:
-    st.subheader("Export table + charts")
     if "tbl" not in dir() or tbl.empty:
         st.warning("No table data — adjust filters in the Table tab first.")
     else:
-        ec1, ec2, ec3 = st.columns(3)
-        with ec1:
+        _n_segs  = len(tbl)
+        _n_comms = len(ordered_comms)
+        _n_cols  = len(tbl.columns)
+
+        # ── Header ───────────────────────────────────────────────────────────
+        st.markdown("## Export data")
+        st.caption(
+            f"Current view: **{_n_segs}** segments · **{_n_comms}** communications · **{_n_cols}** columns. "
+            "Choose a format below."
+        )
+        st.divider()
+
+        # ── Download cards ────────────────────────────────────────────────────
+        _card_css = """
+<style>
+.exp-card {
+    background: #1e2030;
+    border: 1px solid #383a52;
+    border-radius: 10px;
+    padding: 22px 20px 18px 20px;
+    height: 100%;
+}
+.exp-card h3 { margin: 0 0 6px 0; font-size: 15px; color: #e0e0ff; }
+.exp-card .badge {
+    display: inline-block;
+    background: #2e3154;
+    color: #a0aecf;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    border-radius: 4px;
+    padding: 2px 7px;
+    margin-bottom: 10px;
+}
+.exp-card p { font-size: 12px; color: #8a8fac; line-height: 1.6; margin: 0; }
+</style>"""
+        components.html(_card_css + "<div></div>", height=0)
+
+        xc1, xc2, xc3 = st.columns(3, gap="medium")
+
+        with xc1:
+            st.markdown(
+                """<div class="exp-card">
+                <h3>CSV</h3>
+                <span class="badge">PLAIN TEXT</span>
+                <p>Raw numbers, no formatting. Best for Python / SQL / BI tools.</p>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+            st.write("")
             csv_bytes = tbl.reset_index().to_csv(index=False).encode("utf-8")
-            st.download_button("⬇ Download CSV", csv_bytes, "segment_table.csv", "text/csv")
-        with ec2:
+            st.download_button(
+                "Download CSV",
+                csv_bytes, "segment_table.csv", "text/csv",
+                use_container_width=True,
+            )
+
+        with xc2:
+            st.markdown(
+                """<div class="exp-card">
+                <h3>Excel (.xlsx)</h3>
+                <span class="badge">SPREADSHEET</span>
+                <p>Colour-coded conditional formatting — open directly in Excel or Sheets.</p>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+            st.write("")
             try:
                 xlsx_bytes = build_excel(tbl, ordered_comms)
-                st.download_button("⬇ Download Excel (.xlsx)", xlsx_bytes,
-                                   "segment_table.xlsx",
-                                   "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+                st.download_button(
+                    "Download Excel",
+                    xlsx_bytes, "segment_table.xlsx",
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                )
             except Exception as e:
-                st.error(f"Excel export error: {e}")
-        with ec3:
+                st.error(f"Excel error: {e}")
+
+        with xc3:
+            st.markdown(
+                """<div class="exp-card">
+                <h3>PowerPoint (.pptx)</h3>
+                <span class="badge">PRESENTATION</span>
+                <p>Title slide + top-20 segments table slide. Ready to paste into a deck.</p>
+                </div>""",
+                unsafe_allow_html=True,
+            )
+            st.write("")
             try:
                 pptx_bytes = build_pptx(tbl, ordered_comms)
-                st.download_button("⬇ Download PowerPoint (.pptx)", pptx_bytes,
-                                   "segment_report.pptx",
-                                   "application/vnd.openxmlformats-officedocument.presentationml.presentation")
+                st.download_button(
+                    "Download PowerPoint",
+                    pptx_bytes, "segment_report.pptx",
+                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+                    use_container_width=True,
+                )
             except Exception as e:
-                st.error(f"PowerPoint export error: {e}")
+                st.error(f"PowerPoint error: {e}")
 
         st.divider()
-        st.caption(
-            "**Excel**: colour-coded table with conditional formatting.  \n"
-            "**PowerPoint**: title slide + top-20 segments table slide.  \n"
-            "**CSV**: raw numbers for further analysis."
-        )
+
+        # ── Data preview ─────────────────────────────────────────────────────
+        with st.expander("Preview data", expanded=True):
+            _prev = tbl.reset_index()
+            _prev_disp = _prev.head(10)
+            _pct_cols_prev = [c for c in _prev_disp.columns if any(c.endswith(s) for s in ("_bal", "_acct", "_lift_bal", "_lift_acct"))]
+            st.dataframe(
+                _prev_disp.style.format(
+                    {c: "{:.1%}" for c in _pct_cols_prev if c in _prev_disp.columns},
+                    na_rep="—"
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
+            st.caption(f"Showing first 10 of {_n_segs} segments.")
 
 
 # ══════════════════════════════════════════════════════════
