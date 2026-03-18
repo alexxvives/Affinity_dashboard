@@ -78,13 +78,19 @@ def _try_parse_listlike(x):
     return [str(x)]
 
 
+def _df_hash(df: pd.DataFrame) -> int:
+    """Fast approximate hash for large DataFrames — samples ~1 000 evenly-spaced rows."""
+    step = max(1, len(df) // 1000)
+    return int(pd.util.hash_pandas_object(df.iloc[::step]).sum()) ^ hash(df.shape)
+
+
 @st.cache_data(show_spinner=False)
 def _load_csv(b: bytes) -> pd.DataFrame:
     df = pd.read_csv(io.BytesIO(b))
     return df.rename(columns={"Communication": "communication", "Contact_flag": "contact_flag"})
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
 def preprocess(df_raw: pd.DataFrame, date_min: Optional[str], date_max: Optional[str], recency_decay: float, bal_clip_pct: float = 0.0) -> pd.DataFrame:
     df = df_raw.copy()
     df.columns = df.columns.str.lower().str.strip()  # normalise: Communication→communication, Contact_flag→contact_flag
@@ -213,7 +219,7 @@ def _seg_lookup_widget(seg_ids: List[str], labels: Dict[str, str], descriptions:
 
 
 # ── Aggregation ───────────────────────────────────────────────────────────────
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
 def agg_cols_data(
     df: pd.DataFrame,
     selected: Tuple[str, ...],
@@ -245,65 +251,99 @@ def agg_cols_data(
     if treated.empty:
         return EMPTY
 
-    rows = []
-    for seg, grp in treated.groupby("nsegment", dropna=False):
-        w = grp["_weight"]
-        n = grp["alpha_key"].nunique()
-        mb  = _wmean(grp["balance_pct_change"], w)
-        cib = _ci95(grp["balance_pct_change"], w)
-        ma  = _wmean(grp["accounts_pct_change"], w)
-        cia = _ci95(grp["accounts_pct_change"], w)
+    # ── Vectorised per-segment stats ─────────────────────────────────────────
+    g_t      = treated.groupby("nsegment", dropna=False)
+    cnt_b_t  = g_t["balance_pct_change"].count()
+    cnt_a_t  = g_t["accounts_pct_change"].count()
+    mean_b_t = g_t["balance_pct_change"].mean()
+    mean_a_t = g_t["accounts_pct_change"].mean()
+    std_b_t  = g_t["balance_pct_change"].std(ddof=0)
+    std_a_t  = g_t["accounts_pct_change"].std(ddof=0)
+    se_b_t   = (std_b_t / np.sqrt(cnt_b_t)).where(cnt_b_t >= 2)
+    se_a_t   = (std_a_t / np.sqrt(cnt_a_t)).where(cnt_a_t >= 2)
+    n_u      = g_t["alpha_key"].nunique()
 
-        ctrl_grp = control[control["nsegment"] == seg]
-        cb  = _wmean(ctrl_grp["balance_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
-        ca  = _wmean(ctrl_grp["accounts_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
-        lift_b = (mb - cb) if not np.isnan(mb) and not np.isnan(cb) else np.nan
-        lift_a = (ma - ca) if not np.isnan(ma) and not np.isnan(ca) else np.nan
-        se_b  = _se(grp["balance_pct_change"], w)
-        se_cb = _se(ctrl_grp["balance_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
-        se_a  = _se(grp["accounts_pct_change"], w)
-        se_ca = _se(ctrl_grp["accounts_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
-        lift_b_ci = float(Z95 * np.sqrt(se_b**2 + se_cb**2)) if not (np.isnan(se_b) or np.isnan(se_cb)) else np.nan
-        lift_a_ci = float(Z95 * np.sqrt(se_a**2 + se_ca**2)) if not (np.isnan(se_a) or np.isnan(se_ca)) else np.nan
+    if not control.empty:
+        g_c      = control.groupby("nsegment", dropna=False)
+        mean_b_c = g_c["balance_pct_change"].mean().reindex(mean_b_t.index)
+        mean_a_c = g_c["accounts_pct_change"].mean().reindex(mean_a_t.index)
+        cnt_b_c  = g_c["balance_pct_change"].count().reindex(mean_b_t.index)
+        cnt_a_c  = g_c["accounts_pct_change"].count().reindex(mean_a_t.index)
+        std_b_c  = g_c["balance_pct_change"].std(ddof=0).reindex(mean_b_t.index)
+        std_a_c  = g_c["accounts_pct_change"].std(ddof=0).reindex(mean_a_t.index)
+        se_b_c   = (std_b_c / np.sqrt(cnt_b_c)).where(cnt_b_c >= 2)
+        se_a_c   = (std_a_c / np.sqrt(cnt_a_c)).where(cnt_a_c >= 2)
+        lift_b    = mean_b_t - mean_b_c
+        lift_a    = mean_a_t - mean_a_c
+        lift_b_ci = Z95 * np.sqrt(se_b_t**2 + se_b_c**2)
+        lift_a_ci = Z95 * np.sqrt(se_a_t**2 + se_a_c**2)
+    else:
+        lift_b = lift_a = pd.Series(np.nan, index=mean_b_t.index)
+        lift_b_ci = lift_a_ci = pd.Series(np.nan, index=mean_b_t.index)
 
-        rows.append({"nsegment": seg, "agg_bal": mb, "agg_bal_ci": cib,
-                     "agg_acct": ma, "agg_acct_ci": cia,
-                     "agg_lift_bal": lift_b, "agg_lift_bal_ci": lift_b_ci,
-                     "agg_lift_acct": lift_a, "agg_lift_acct_ci": lift_a_ci, "agg_n": n})
-    return pd.DataFrame(rows) if rows else EMPTY
+    out = pd.DataFrame({
+        "nsegment":         mean_b_t.index,
+        "agg_bal":          mean_b_t.values,
+        "agg_bal_ci":       (Z95 * se_b_t).values,
+        "agg_acct":         mean_a_t.values,
+        "agg_acct_ci":      (Z95 * se_a_t).values,
+        "agg_lift_bal":     lift_b.values,
+        "agg_lift_bal_ci":  lift_b_ci.values,
+        "agg_lift_acct":    lift_a.values,
+        "agg_lift_acct_ci": lift_a_ci.values,
+        "agg_n":            n_u.values,
+    })
+    return out if not out.empty else EMPTY
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
 def comm_data(df: pd.DataFrame, comm: str) -> pd.DataFrame:
     EMPTY = pd.DataFrame(columns=["nsegment", f"{comm}_bal", f"{comm}_bal_ci", f"{comm}_acct", f"{comm}_acct_ci", f"{comm}_n", f"{comm}_lift_bal", f"{comm}_lift_bal_ci", f"{comm}_lift_acct", f"{comm}_lift_acct_ci"])
-    treated = df[(df["contact_flag"] == 1) & (df["communication"] == comm)].copy()
-    control = df[(df["control_flag"] == 1) & (df["communication"] == comm)].copy()
+    treated = df[(df["contact_flag"] == 1) & (df["communication"] == comm)]
+    control = df[(df["control_flag"] == 1) & (df["communication"] == comm)]
     if treated.empty:
         return EMPTY
-    rows = []
-    for seg, grp in treated.groupby("nsegment", dropna=False):
-        w = grp["_weight"]
-        n = grp["alpha_key"].nunique()
-        mb  = _wmean(grp["balance_pct_change"], w)
-        cib = _ci95(grp["balance_pct_change"], w)
-        ma  = _wmean(grp["accounts_pct_change"], w)
-        cia = _ci95(grp["accounts_pct_change"], w)
-        ctrl_grp = control[control["nsegment"] == seg]
-        cb = _wmean(ctrl_grp["balance_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
-        ca = _wmean(ctrl_grp["accounts_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
-        lift_b = (mb - cb) if not (np.isnan(mb) or np.isnan(cb)) else np.nan
-        lift_a = (ma - ca) if not (np.isnan(ma) or np.isnan(ca)) else np.nan
-        se_b  = _se(grp["balance_pct_change"], w)
-        se_cb = _se(ctrl_grp["balance_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
-        se_a  = _se(grp["accounts_pct_change"], w)
-        se_ca = _se(ctrl_grp["accounts_pct_change"], ctrl_grp["_weight"]) if not ctrl_grp.empty else np.nan
-        lift_b_ci = float(Z95 * np.sqrt(se_b**2 + se_cb**2)) if not (np.isnan(se_b) or np.isnan(se_cb)) else np.nan
-        lift_a_ci = float(Z95 * np.sqrt(se_a**2 + se_ca**2)) if not (np.isnan(se_a) or np.isnan(se_ca)) else np.nan
-        rows.append({"nsegment": seg, f"{comm}_bal": mb, f"{comm}_bal_ci": cib,
-                     f"{comm}_acct": ma, f"{comm}_acct_ci": cia, f"{comm}_n": n,
-                     f"{comm}_lift_bal": lift_b, f"{comm}_lift_bal_ci": lift_b_ci,
-                     f"{comm}_lift_acct": lift_a, f"{comm}_lift_acct_ci": lift_a_ci})
-    return pd.DataFrame(rows) if rows else EMPTY
+
+    def _vstat(sub):
+        """Vectorised per-segment mean, biased-SE (weights always 1.0 since recency_decay=0)."""
+        g      = sub.groupby("nsegment", dropna=False)
+        cnt_b  = g["balance_pct_change"].count()
+        cnt_a  = g["accounts_pct_change"].count()
+        mean_b = g["balance_pct_change"].mean()
+        mean_a = g["accounts_pct_change"].mean()
+        std_b  = g["balance_pct_change"].std(ddof=0)
+        std_a  = g["accounts_pct_change"].std(ddof=0)
+        # SE = biased-std / sqrt(n); NaN when fewer than 2 valid observations
+        se_b   = (std_b / np.sqrt(cnt_b)).where(cnt_b >= 2)
+        se_a   = (std_a / np.sqrt(cnt_a)).where(cnt_a >= 2)
+        return mean_b, mean_a, se_b, se_a
+
+    t_mb, t_ma, t_se_b, t_se_a = _vstat(treated)
+    n_u = treated.groupby("nsegment", dropna=False)["alpha_key"].nunique()
+
+    if not control.empty:
+        c_mb, c_ma, c_se_b, c_se_a = _vstat(control)
+        lift_b    = t_mb - c_mb.reindex(t_mb.index)
+        lift_a    = t_ma - c_ma.reindex(t_ma.index)
+        lift_b_ci = Z95 * np.sqrt(t_se_b**2 + c_se_b.reindex(t_mb.index)**2)
+        lift_a_ci = Z95 * np.sqrt(t_se_a**2 + c_se_a.reindex(t_ma.index)**2)
+    else:
+        lift_b = lift_a = pd.Series(np.nan, index=t_mb.index)
+        lift_b_ci = lift_a_ci = pd.Series(np.nan, index=t_mb.index)
+
+    result = pd.DataFrame({
+        "nsegment":             t_mb.index,
+        f"{comm}_bal":          t_mb.values,
+        f"{comm}_bal_ci":       (Z95 * t_se_b).values,
+        f"{comm}_acct":         t_ma.values,
+        f"{comm}_acct_ci":      (Z95 * t_se_a).values,
+        f"{comm}_n":            n_u.reindex(t_mb.index).values,
+        f"{comm}_lift_bal":     lift_b.values,
+        f"{comm}_lift_bal_ci":  lift_b_ci.values,
+        f"{comm}_lift_acct":    lift_a.values,
+        f"{comm}_lift_acct_ci": lift_a_ci.values,
+    })
+    return result if not result.empty else EMPTY
 
 
 # Minimum N for a lift to be statistically meaningful.
@@ -313,7 +353,7 @@ def comm_data(df: pd.DataFrame, comm: str) -> pd.DataFrame:
 _MIN_N_DEFAULT = 30
 
 
-@st.cache_data(show_spinner=False)
+@st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
 def build_table(
     df: pd.DataFrame,
     ordered_comms: List[str],
