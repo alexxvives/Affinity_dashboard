@@ -829,8 +829,8 @@ with st.sidebar:
         )
         st.markdown("---")
         _BAL_BASELINE_MIN = 5
-        bal_baseline_min = float(_BAL_BASELINE_MIN)
-        st.info(f"⚠️ Low-balance filter: segments where avg starting balance < €{_BAL_BASELINE_MIN:,} are excluded from rankings.")
+        bal_baseline_min = None  # disabled — dummy data balances too small
+        st.info("⚠️ Low-balance filter: disabled for current dataset.")
 
     recency_decay = 0.0  # treat all dates equally
 
