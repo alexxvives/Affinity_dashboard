@@ -87,6 +87,7 @@ def _load_csv(b: bytes) -> pd.DataFrame:
 @st.cache_data(show_spinner=False)
 def preprocess(df_raw: pd.DataFrame, date_min: Optional[str], date_max: Optional[str], recency_decay: float, bal_clip_pct: float = 0.0) -> pd.DataFrame:
     df = df_raw.copy()
+    df.columns = df.columns.str.lower().str.strip()  # normalise: Communication→communication, Contact_flag→contact_flag
     df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
     df["end_date"]   = pd.to_datetime(df["end_date"],   errors="coerce")
     df["communication"] = df["communication"].astype(str).str.strip()
