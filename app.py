@@ -320,6 +320,7 @@ def build_table(
     all_mode: bool,
     min_n: int,
     bal_baseline_min: Optional[float],
+    _ver: int = 2,  # bump to invalidate stale cache
 ) -> pd.DataFrame:
     base = pd.DataFrame({"nsegment": sorted(df["nsegment"].unique())})
     a = agg_cols_data(df, tuple(ordered_comms), all_mode, bal_baseline_min)
@@ -745,7 +746,7 @@ div.block-container { padding-top: 3rem !important; }
 st.title("Affinity Explorer")
 st.caption(
     "Analyse how each communication touchpoint affects customer balances and accounts across segments. "
-    "Use the **Segment Explorer** to browse segments, **Table** for the full data grid, "
+    "Use the **Segment Explorer** to browse segments, **Data** for the full data grid, "
     "**Targeting Simulator** for audience recommendations, **Charts** for visual deep-dives, "
     "and **Data Quality** for health checks. Adjust filters in the sidebar."
 )
@@ -972,7 +973,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         _show_metric_val = "both"
 
     with st.spinner("Computing..."):
-        tbl = build_table(df, ordered_comms, all_mode, min_n, bal_baseline_min)
+        tbl = build_table(df, ordered_comms, all_mode, min_n, bal_baseline_min, _ver=2)
 
     if tbl.empty:
         st.warning("No segments pass the current filters. Try adjusting filters in the sidebar.")
@@ -989,10 +990,8 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         components.html(html_tbl, height=_tbl_h, scrolling=True)
         if show_lift:
             st.caption(
-                "🟢 **Strong color** = lift 95% CI does not cross zero (statistically significant).  "
-                "🟡 **Muted color** = CI crosses zero (direction not reliable at 95% level).  "
-                "**Lift CI±** = the margin of error (half-width) of the 95% confidence interval. "
-                "Example: Lift = 5.0%, CI± = 2.0% → true lift is likely between **3.0% and 7.0%** with 95% confidence. "
+                "**Lift CI±** = margin of error (half-width) of the 95% confidence interval. "
+                "Example: Lift = 5.0%, CI± = 2.0% → true lift is likely between 3.0% and 7.0% with 95% confidence. "
                 "**Blank cells** = fewer than 30 customers in that segment × communication (too small to trust)."
             )
 
@@ -1251,7 +1250,7 @@ with tab_charts:
         """)
 
     if "tbl" not in dir() or tbl.empty:
-        st.warning("No table data — adjust filters in the Table tab.")
+        st.warning("No table data — adjust filters in the Data tab.")
     else:
         st.caption(
             "**Top segments bar chart** — ranks segments by the selected metric. "
@@ -1638,7 +1637,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
         """)
 
     if "tbl" not in dir() or tbl.empty:
-        st.warning("No table data — adjust filters in the Table tab first.")
+        st.warning("No table data — adjust filters in the Data tab first.")
     else:
         all_segs_sim = sorted(tbl.index.astype(str).tolist())
         # Default to top 10 by first comm's balance lift (most actionable)
