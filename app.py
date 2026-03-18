@@ -399,9 +399,9 @@ def style_tbl(
         rename[f"{c}_acct_ci"]      = f"{c} \u00b1CI Acct"
         rename[f"{c}_n"]            = f"{c} N"
         rename[f"{c}_lift_bal"]     = f"{c} Lift Bal"
-        rename[f"{c}_lift_bal_ci"]  = f"{c} \u00b1CI Lift Bal"
+        rename[f"{c}_lift_bal_ci"]  = f"{c} Lift CI±"
         rename[f"{c}_lift_acct"]    = f"{c} Lift Acct"
-        rename[f"{c}_lift_acct_ci"] = f"{c} \u00b1CI Lift Acct"
+        rename[f"{c}_lift_acct_ci"] = f"{c} Lift Acct CI±"
     disp = disp.rename(columns=rename)
 
     # Drop columns based on toggles
@@ -823,15 +823,11 @@ with st.sidebar:
     st.divider()
     with st.expander("⚙️ Advanced filters", expanded=False):
         all_mode = False
-        bal_clip_pct = st.slider(
-            "Clip extreme balance % changes (percentile)",
-            min_value=0, max_value=20, value=5, step=1,
-            help="Removes the most extreme values at both ends. 5 = clip below 5th and above 95th percentile.",
-        )
+        bal_clip_pct = 5  # clip below 5th and above 95th percentile (hardcoded)
         st.markdown("---")
-        _BAL_BASELINE_MIN = 5
-        bal_baseline_min = None  # disabled — dummy data balances too small
-        st.info("⚠️ Low-balance filter: disabled for current dataset.")
+        _BAL_BASELINE_MIN = 25
+        bal_baseline_min = float(_BAL_BASELINE_MIN)
+        st.info(f"⚠️ Low-balance filter active: segments where avg customer starting balance < €{_BAL_BASELINE_MIN:,} are excluded from rankings.")
 
     recency_decay = 0.0  # treat all dates equally
 
@@ -969,7 +965,14 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
     _row1 = st.columns(_n_pc + 1)
     for _i, _c in enumerate(_all_present_comms):
         _row1[_i].checkbox(_c, value=True, key=f"cb_{_c}")
-    show_lift = _row1[_n_pc].checkbox("Show lift vs control", value=False, key="tbl_show_lift")
+    show_lift = _row1[_n_pc].checkbox(
+        "Show lift vs control",
+        value=False,
+        key="tbl_show_lift",
+        help="Lift = treatment group mean − control group mean in the same segment. "
+             "Positive = the communication added value beyond background trends. "
+             "Enable this to see whether the % change is *caused by* the communication, not just correlated.",
+    )
     ordered_comms = [c for c in _all_present_comms if st.session_state.get(f"cb_{c}", True)]
     if not ordered_comms:
         ordered_comms = _all_present_comms[:]
@@ -980,6 +983,9 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         ["Balance", "Accounts", "Sample size"],
         default=["Balance", "Accounts"],
         key="show_metric_ms",
+        help="Balance = % change in account balance over the 7-day window. "
+             "Accounts = % change in number of open accounts. "
+             "Sample size = number of treated customers (N) per segment × communication cell.",
     )
     _sel = _metric_sel or ["Balance", "Accounts"]
     _show_bal  = "Balance"     in _sel
@@ -1012,8 +1018,9 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             st.caption(
                 "🟢 **Strong color** = lift 95% CI does not cross zero (statistically significant).  "
                 "🟡 **Muted color** = CI crosses zero (direction not reliable at 95% level).  "
-                "The **\u00b1CI Lift** column shows the **margin of error** (half-width) of the 95% CI. "
-                "Example: Lift = 5.0%, \u00b1CI = 2.0% → true lift is between 3.0% and 7.0% with 95% confidence."
+                "**Lift CI±** = the margin of error (half-width) of the 95% confidence interval. "
+                "Example: Lift = 5.0%, CI± = 2.0% → true lift is likely between **3.0% and 7.0%** with 95% confidence. "
+                "**Blank cells** = fewer than 30 customers in that segment × communication (too small to trust)."
             )
 
         # ── Send top-N to Simulator ───────────────────────────────────────────
@@ -1179,7 +1186,15 @@ with tab_charts:
                        + [f"{c} Acct%"      for c in ordered_comms]
                        + [f"{c} Lift Bal"   for c in ordered_comms]
                        + [f"{c} Lift Acct"  for c in ordered_comms])
-        chosen = st.selectbox("Sort / highlight metric", metric_opts, key="chart_cm")
+        chosen = st.selectbox(
+            "Sort / highlight metric",
+            metric_opts,
+            key="chart_cm",
+            help="Determines which metric is used to rank segments on the bar chart. "
+                 "Bal% = raw % balance change for treated customers. "
+                 "Lift Bal = treatment minus control (causal effect). "
+                 "Use Lift to isolate what the communication *caused*.",
+        )
 
         col_map = {
             **{f"{c} Bal%":      f"{c}_bal"       for c in ordered_comms},
@@ -1230,7 +1245,15 @@ with tab_charts:
         st.divider()
 
         # ── Heatmap ─────────────────────────────────────────────────────────
-        _hm_metric = st.radio("Heatmap metric", ["Balance %", "Accounts %"], horizontal=True, key="hm_metric")
+        _hm_metric = st.radio(
+            "Heatmap metric",
+            ["Balance %", "Accounts %"],
+            horizontal=True,
+            key="hm_metric",
+            help="Balance % = average % change in account balance over the 7-day window. "
+                 "Accounts % = average % change in number of open accounts. "
+                 "Green cells = positive response to that communication. Red = negative.",
+        )
         _hm_suffix = "_bal" if _hm_metric == "Balance %" else "_acct"
         _hm_label  = "Bal% Δ" if _hm_metric == "Balance %" else "Acct% Δ"
         st.subheader(f"{_hm_label} — segment × communication")
@@ -1549,7 +1572,8 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
         sim_segs = st.multiselect(
             "Segments to include in the simulation",
             options=all_segs_sim,
-            default=_default_sim,
+            default=st.session_state.get("sim_segs", []),
+            # start empty — let the user pick, or use Send to Simulator from the Table tab
             format_func=lambda x: x,
             key="sim_segs",
         )
@@ -1708,7 +1732,13 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                 "Blank = no control data or fewer customers than the minimum N filter. "
                 "Hover a segment ID for its description."
             )
-            _show_sim_n = _c_sim_tog.toggle("Show sample size", value=False, key="sim_show_n")
+            _show_sim_n = _c_sim_tog.toggle(
+                "Show sample size",
+                value=False,
+                key="sim_show_n",
+                help="Adds an N column next to each lift value showing how many treated customers "
+                     "are in that segment × communication cell. Higher N = more reliable lift estimate.",
+            )
 
             # Build columns: lift only, or interleaved lift + N
             _intl_cols = []
