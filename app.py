@@ -3,7 +3,12 @@
 
 import ast
 import io
+import os
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
+
+_APP_DIR = Path(__file__).parent
 
 import numpy as np
 import pandas as pd
@@ -19,7 +24,7 @@ except ImportError:
 
 # Load real segment data from segment_descriptions.csv (overrides generate_dummy_data values)
 try:
-    _sdesc_df = pd.read_csv("segment_descriptions.csv", dtype=str)
+    _sdesc_df = pd.read_csv(_APP_DIR / "segment_descriptions.csv", dtype=str)
     if {"nsegment", "label", "description"}.issubset(_sdesc_df.columns):
         SEGMENT_LABELS = dict(zip(_sdesc_df["nsegment"], _sdesc_df["label"].fillna("")))
         SEGMENT_DESCRIPTIONS = dict(zip(_sdesc_df["nsegment"], _sdesc_df["description"].fillna("")))
@@ -34,7 +39,7 @@ except FileNotFoundError:
 # ── Config ────────────────────────────────────────────────────────────────────
 COMM_ORDER = ["day1", "day5", "day7", "day31", "day61", "day90", "day120"]
 REQUIRED_COLS = [
-    "Communication", "alpha_key", "Contact_flag",
+    "communication", "alpha_key", "contact_flag",
     "start_date", "end_date",
     "start_balance", "end_balance",
     "start_accounts", "end_accounts",
@@ -65,13 +70,18 @@ def _try_parse_listlike(x):
         if "," in s:
             parts = [p.strip().strip(chr(39)).strip(chr(34)) for p in s.split(",")]
             return [p for p in parts if p != ""]
+        # dash-delimited format: "-000302-3290392-3203203-" → ["000302", "3290392", "3203203"]
+        if s.startswith("-") and s.endswith("-") and len(s) > 1:
+            parts = [p.strip() for p in s.strip("-").split("-")]
+            return [p for p in parts if p != ""]
         return [s.strip(chr(39)).strip(chr(34))]
     return [str(x)]
 
 
 @st.cache_data(show_spinner=False)
 def _load_csv(b: bytes) -> pd.DataFrame:
-    return pd.read_csv(io.BytesIO(b))
+    df = pd.read_csv(io.BytesIO(b))
+    return df.rename(columns={"Communication": "communication", "Contact_flag": "contact_flag"})
 
 
 @st.cache_data(show_spinner=False)
@@ -79,13 +89,13 @@ def preprocess(df_raw: pd.DataFrame, date_min: Optional[str], date_max: Optional
     df = df_raw.copy()
     df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
     df["end_date"]   = pd.to_datetime(df["end_date"],   errors="coerce")
-    df["Communication"] = df["Communication"].astype(str).str.strip()
-    df["Contact_flag"]  = pd.to_numeric(df["Contact_flag"], errors="coerce").fillna(0).astype(int)
-    # Use explicit control_flag column from data if present; otherwise infer from Contact_flag
+    df["communication"] = df["communication"].astype(str).str.strip()
+    df["contact_flag"]  = pd.to_numeric(df["contact_flag"], errors="coerce").fillna(0).astype(int)
+    # Use explicit control_flag column from data if present; otherwise infer from contact_flag
     if "control_flag" in df.columns:
         df["control_flag"] = pd.to_numeric(df["control_flag"], errors="coerce").fillna(0).astype(int)
     else:
-        df["control_flag"] = (df["Contact_flag"] == 0).astype(int)
+        df["control_flag"] = (df["contact_flag"] == 0).astype(int)
     for col in ["start_balance", "end_balance", "start_accounts", "end_accounts"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -95,6 +105,7 @@ def preprocess(df_raw: pd.DataFrame, date_min: Optional[str], date_max: Optional
     if date_max:
         df = df[df["start_date"] <= pd.Timestamp(date_max)]
 
+    # Normalise dash-delimited strings like "-000302-3290392-" into a list before further parsing
     df["nsegments"] = df["nsegments"].apply(_try_parse_listlike)
     df["nsegments"] = df["nsegments"].apply(lambda xs: xs if xs else ["__NO_SEGMENT__"])
     df = df.explode("nsegments").rename(columns={"nsegments": "nsegment"})
@@ -132,7 +143,7 @@ def _rank(c: str) -> int:
     try:
         return COMM_ORDER.index(c)
     except ValueError:
-        return -1
+        return 999
 
 
 def _wmean(vals: pd.Series, weights: pd.Series) -> float:
@@ -206,20 +217,18 @@ def agg_cols_data(
     df: pd.DataFrame,
     selected: Tuple[str, ...],
     all_mode: bool,
-    bal_min: float,
-    acct_min: float,
     bal_baseline_min: Optional[float],
 ) -> pd.DataFrame:
     EMPTY = pd.DataFrame(columns=["nsegment", "agg_bal", "agg_bal_ci", "agg_acct", "agg_acct_ci", "agg_lift_bal", "agg_lift_bal_ci", "agg_lift_acct", "agg_lift_acct_ci", "agg_n"])
     if not selected:
         return EMPTY
-    treated = df[(df["Contact_flag"] == 1) & (df["Communication"].isin(list(selected)))].copy()
-    control = df[(df["control_flag"] == 1) & (df["Communication"].isin(list(selected)))].copy()
+    treated = df[(df["contact_flag"] == 1) & (df["communication"].isin(list(selected)))].copy()
+    control = df[(df["control_flag"] == 1) & (df["communication"].isin(list(selected)))].copy()
     if treated.empty:
         return EMPTY
-    treated["_r"] = treated["Communication"].map(_rank)
+    treated["_r"] = treated["communication"].map(_rank)
     if all_mode:
-        cnt = (treated.groupby(["alpha_key", "nsegment"])["Communication"]
+        cnt = (treated.groupby(["alpha_key", "nsegment"])["communication"]
                .nunique().reset_index(name="_c"))
         ok = cnt[cnt["_c"] >= len(set(selected))][["alpha_key", "nsegment"]]
         treated = treated.merge(ok, on=["alpha_key", "nsegment"], how="inner")
@@ -227,8 +236,6 @@ def agg_cols_data(
             return EMPTY
     treated = (treated.sort_values("_r", ascending=False)
                       .drop_duplicates(subset=["alpha_key", "nsegment"], keep="first"))
-    treated = treated[treated["balance_pct_change"].fillna(-np.inf)  >= bal_min]
-    treated = treated[treated["accounts_pct_change"].fillna(-np.inf) >= acct_min]
     # Low-balance filter: exclude segments with mean start_balance below minimum
     if bal_baseline_min is not None:
         seg_base = treated.groupby("nsegment")["start_balance"].mean()
@@ -266,12 +273,10 @@ def agg_cols_data(
 
 
 @st.cache_data(show_spinner=False)
-def comm_data(df: pd.DataFrame, comm: str, bal_min: float, acct_min: float) -> pd.DataFrame:
+def comm_data(df: pd.DataFrame, comm: str) -> pd.DataFrame:
     EMPTY = pd.DataFrame(columns=["nsegment", f"{comm}_bal", f"{comm}_bal_ci", f"{comm}_acct", f"{comm}_acct_ci", f"{comm}_n", f"{comm}_lift_bal", f"{comm}_lift_bal_ci", f"{comm}_lift_acct", f"{comm}_lift_acct_ci"])
-    treated = df[(df["Contact_flag"] == 1) & (df["Communication"] == comm)].copy()
-    control = df[(df["control_flag"] == 1) & (df["Communication"] == comm)].copy()
-    treated = treated[treated["balance_pct_change"].fillna(-np.inf)  >= bal_min]
-    treated = treated[treated["accounts_pct_change"].fillna(-np.inf) >= acct_min]
+    treated = df[(df["contact_flag"] == 1) & (df["communication"] == comm)].copy()
+    control = df[(df["control_flag"] == 1) & (df["communication"] == comm)].copy()
     if treated.empty:
         return EMPTY
     rows = []
@@ -300,18 +305,23 @@ def comm_data(df: pd.DataFrame, comm: str, bal_min: float, acct_min: float) -> p
     return pd.DataFrame(rows) if rows else EMPTY
 
 
+# Minimum N for a lift to be statistically meaningful.
+# Below this, the standard error is too large for the lift to be trusted.
+# Rule of thumb: N=30 gives ~18% standard error on a typical proportion;
+# N=50 gives ~14%. We use 30 as floor but expose it as a constant.
+_MIN_N_DEFAULT = 30
+
+
 @st.cache_data(show_spinner=False)
 def build_table(
     df: pd.DataFrame,
     ordered_comms: List[str],
     all_mode: bool,
-    agg_thr: Tuple[float, float],
-    comm_thr: Dict[str, Tuple[float, float]],
     min_n: int,
     bal_baseline_min: Optional[float],
 ) -> pd.DataFrame:
     base = pd.DataFrame({"nsegment": sorted(df["nsegment"].unique())})
-    a = agg_cols_data(df, tuple(ordered_comms), all_mode, *agg_thr, bal_baseline_min)
+    a = agg_cols_data(df, tuple(ordered_comms), all_mode, bal_baseline_min)
     tbl = base.merge(a, on="nsegment", how="left")
     if "agg_n" in tbl.columns:
         mask = tbl["agg_n"].fillna(0) < min_n
@@ -319,8 +329,10 @@ def build_table(
                     "agg_lift_bal", "agg_lift_bal_ci", "agg_lift_acct", "agg_lift_acct_ci"]:
             if col in tbl.columns:
                 tbl.loc[mask, col] = np.nan
-    for comm in ordered_comms:
-        ca = comm_data(df, comm, *comm_thr.get(comm, (-1.0, -1.0)))
+    # Fetch per-communication stats in parallel
+    with ThreadPoolExecutor() as pool:
+        comm_results = list(pool.map(lambda c: comm_data(df, c), ordered_comms))
+    for comm, ca in zip(ordered_comms, comm_results):
         tbl = tbl.merge(ca, on="nsegment", how="left")
         nc = f"{comm}_n"
         if nc in tbl.columns:
@@ -335,7 +347,7 @@ def build_table(
     return tbl
 
 
-def _rdylgn(val: float, lo: float = -0.5, hi: float = 0.5) -> str:
+def _rdylgn(val: float, lo: float = -0.10, hi: float = 0.10) -> str:
     if pd.isna(val):
         return ""
     t = max(0.0, min(1.0, (val - lo) / (hi - lo)))
@@ -644,7 +656,8 @@ def _styled_html_table(
 def build_excel(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        out = tbl.reset_index()
+        _drop = [c for c in tbl.columns if c.endswith("_ci") or c.startswith("agg_")]
+        out = tbl.drop(columns=_drop).reset_index()
         out.to_excel(writer, sheet_name="Segments", index=False)
         wb = writer.book
         ws = writer.sheets["Segments"]
@@ -658,7 +671,13 @@ def build_excel(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
             if col not in col_idx:
                 continue
             ci = col_idx[col]
-            col_letter = chr(ord("A") + ci)
+            col_letter = ""
+            _ci_tmp = ci
+            while True:
+                col_letter = chr(ord("A") + _ci_tmp % 26) + col_letter
+                _ci_tmp = _ci_tmp // 26 - 1
+                if _ci_tmp < 0:
+                    break
             ws.conditional_format(
                 1, ci, len(out), ci,
                 {"type": "3_color_scale", "min_color": "#F8696B",
@@ -700,7 +719,7 @@ def build_pptx(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
     sl2.background.fill.solid()
     sl2.background.fill.fore_color.rgb = RGBColor(0x1C, 0x1E, 0x2A)
     txb2 = sl2.shapes.add_textbox(Inches(0.3), Inches(0.2), Inches(12), Inches(0.6))
-    txb2.text_frame.text = "Top 20 Segments — Balance % Change (agg)"
+    txb2.text_frame.text = "Top 20 Segments — Balance % Change"
     txb2.text_frame.paragraphs[0].runs[0].font.size = Pt(18)
     txb2.text_frame.paragraphs[0].runs[0].font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
 
@@ -710,7 +729,8 @@ def build_pptx(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
     ptbl = tbl_shape.table
 
     hdr_fill = RGBColor(0x26, 0x27, 0x30)
-    headers = ["Segment"] + [c.replace("_", " ").title() for c in key_cols]
+    _pptx_rename = {"agg_bal": "Balance %", "agg_lift_bal": "Lift (Balance)", "agg_acct": "Accounts %", "agg_n": "Customers"}
+    headers = ["Segment"] + [_pptx_rename.get(c, c.replace("_", " ").title()) for c in key_cols]
     for ci, h in enumerate(headers):
         cell = ptbl.cell(0, ci)
         cell.text = h
@@ -750,10 +770,16 @@ div.block-container { padding-top: 3rem !important; }
 </style>
 """, unsafe_allow_html=True)
 st.title("Affinity Explorer")
+st.caption(
+    "Analyse how each communication touchpoint affects customer balances and accounts across segments. "
+    "Use the **Segment Explorer** to browse segments, **Table** for the full data grid, "
+    "**Targeting Simulator** for audience recommendations, **Charts** for visual deep-dives, "
+    "and **Data Quality** for health checks. Adjust filters in the sidebar."
+)
 
 # ── Load raw CSV ──────────────────────────────────────────────────────────────
 try:
-    with open("dummy_segment_data.csv", "rb") as f:
+    with open(_APP_DIR / "dummy_segment_data.csv", "rb") as f:
         raw_bytes = f.read()
     df_raw = _load_csv(raw_bytes)
 except FileNotFoundError:
@@ -786,56 +812,25 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Display")
-    # Square compact CSS for the flanking ±1 buttons
-    st.markdown("""
-    <style>
-    section[data-testid="stSidebar"] .stButton button {
-        min-width: 1.3rem !important; max-width: 1.3rem !important;
-        height: 1.3rem !important; padding: 0 !important;
-        font-size: 0.7rem !important; line-height: 1 !important;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    # ── min_n: slider + −1/+1 flanking buttons ───────────────────────────────
-    if "min_n_val" not in st.session_state:
-        st.session_state["min_n_val"] = 0
-    # Clamp stored value if dataset changed
-    st.session_state["min_n_val"] = max(0, min(_max_slider_n, st.session_state["min_n_val"]))
-    st.caption("Hide cells with fewer than N users")
-    _mn_c1, _mn_c2, _mn_c3 = st.columns([1, 10, 1])
-    if _mn_c1.button("−", key="mn_m1"):
-        st.session_state["min_n_val"] = max(0, st.session_state["min_n_val"] - 1)
-    if _mn_c3.button("+", key="mn_p1"):
-        st.session_state["min_n_val"] = min(_max_slider_n, st.session_state["min_n_val"] + 1)
-    with _mn_c2:
-        min_n = st.slider("N", 0, _max_slider_n, key="min_n_val", label_visibility="collapsed")
+    # ── min_n: auto-threshold (no slider) ────────────────────────────────────
+    min_n = _MIN_N_DEFAULT
+    st.caption(
+        f"Segments with fewer than **{min_n}** treated customers are hidden "
+        f"(minimum for statistically meaningful lift estimates)."
+    )
 
     st.divider()
     with st.expander("⚙️ Advanced filters", expanded=False):
-        all_mode = st.toggle(
-            "Only count customers who received all selected communications",
-            value=False,
-            help="When ON, a customer is only counted if they appear in every selected communication step.",
-        )
-        agg_thr = (-1.0, -1.0)
-        comm_thr: Dict[str, Tuple[float, float]] = {c: agg_thr for c in COMM_ORDER}
-        st.markdown("---")
+        all_mode = False
         bal_clip_pct = st.slider(
             "Clip extreme balance % changes (percentile)",
             min_value=0, max_value=20, value=5, step=1,
             help="Removes the most extreme values at both ends. 5 = clip below 5th and above 95th percentile.",
         )
         st.markdown("---")
-        st.markdown("**⚠️ Exclude low-balance segments**")
-        st.caption(
-            "Segments where customers had very little money at the start can show big % gains "
-            "from a small euro increase. Set a minimum to remove them from the ranking."
-        )
-        bal_baseline_cap_raw = st.slider(
-            "Min. avg customer starting balance (€, 0 = off)",
-            min_value=0, max_value=10000, value=0, step=250,
-        )
-        bal_baseline_min = float(bal_baseline_cap_raw) if bal_baseline_cap_raw > 0 else None
+        _BAL_BASELINE_MIN = 500
+        bal_baseline_min = float(_BAL_BASELINE_MIN)
+        st.info(f"⚠️ Low-balance filter: segments where avg starting balance < €{_BAL_BASELINE_MIN:,} are excluded from rankings.")
 
     recency_decay = 0.0  # treat all dates equally
 
@@ -850,19 +845,18 @@ df = preprocess(
 )
 
 # ── ordered_comms from session state (checkboxes live inside Table tab) ─────────
-_all_present_comms = [c for c in COMM_ORDER if c in df["Communication"].unique()]
+_all_present_comms = [c for c in COMM_ORDER if c in df["communication"].unique()]
 ordered_comms = [c for c in _all_present_comms if st.session_state.get(f"cb_{c}", True)]
 if not ordered_comms:
     ordered_comms = _all_present_comms[:]
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_explorer, tab_table, tab_simulator, tab_charts, tab_export, tab_audit = st.tabs([
+tab_explorer, tab_table, tab_simulator, tab_charts, tab_audit = st.tabs([
     "Segment Explorer",
     "Table",
     "Targeting Simulator",
     "Charts",
-    "Export",
-    "Audit",
+    "Data Quality",
 ])
 
 
@@ -871,7 +865,7 @@ tab_explorer, tab_table, tab_simulator, tab_charts, tab_export, tab_audit = st.t
 # ══════════════════════════════════════════════════════════
 with tab_explorer:
     st.subheader("Segment catalogue")
-    st.caption("Browse all segments by category. Unique Users = contacted users in the active date range.")
+    st.caption("Browse all segments by category. Unique Customers = contacted customers in the active date range.")
     if not SEGMENT_LABELS:
         st.info("No segment descriptions found. Ensure segment_descriptions.csv is present in the app directory.")
     else:
@@ -882,46 +876,39 @@ with tab_explorer:
             "Description": [SEGMENT_DESCRIPTIONS.get(k, "") for k in SEGMENT_LABELS],
         })
         _user_counts = (
-            df[df["Contact_flag"] == 1]
+            df[df["contact_flag"] == 1]
             .groupby("nsegment")["alpha_key"]
             .nunique()
-            .rename("Unique Users")
+            .rename("Unique Customers")
             .reset_index()
             .rename(columns={"nsegment": "Segment ID"})
         )
         _exp_base = _exp_base.merge(_user_counts, on="Segment ID", how="left")
-        _exp_base["Unique Users"] = _exp_base["Unique Users"].fillna(0).astype(int)
+        _exp_base["Unique Customers"] = _exp_base["Unique Customers"].fillna(0).astype(int)
         _exp_base = _exp_base.sort_values(["Group", "Segment ID"]).reset_index(drop=True)
-
-        # ── Group filter ────────────────────────────────────────────────────────
-        _all_groups = sorted(_exp_base["Group"].unique().tolist())
-        _sel_groups = st.multiselect(
-            "Filter by group", _all_groups, default=_all_groups, key="explorer_groups"
-        )
-        _filtered_exp = _exp_base[_exp_base["Group"].isin(_sel_groups)].copy()
 
         # ── Full segment table (always visible) ────────────────────────────────
         _exp_styler = (
-            _filtered_exp.set_index("Segment ID")
+            _exp_base.set_index("Segment ID")
             .style
-            .apply(lambda s: s.map(_n_color), subset=["Unique Users"], axis=0)
+            .apply(lambda s: s.map(_n_color), subset=["Unique Customers"], axis=0)
             .format(na_rep="")
         )
-        _exp_h = max(300, min(700, 60 + len(_filtered_exp) * 26))
+        _exp_h = max(300, min(700, 60 + len(_exp_base) * 26))
         components.html(
             _styled_html_table(_exp_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_exp_h),
             height=_exp_h, scrolling=True,
         )
-        st.caption(f"{len(_filtered_exp):,} segments \u2014 {len(_sel_groups)} group(s) selected. Hover over a segment ID for its description.")
+        st.caption(f"{len(_exp_base):,} segments across {_exp_base['Group'].nunique()} groups. Hover over a segment ID for its description.")
 
         st.divider()
 
         # ── Group size chart ───────────────────────────────────────────────────────
         _grp_sz = (
-            _filtered_exp.groupby("Group")
-            .agg(Segments=("Segment ID", "count"), Users=("Unique Users", "sum"))
+            _exp_base.groupby("Group")
+            .agg(Segments=("Segment ID", "count"), Customers=("Unique Customers", "sum"))
             .reset_index()
-            .sort_values("Users", ascending=False)
+            .sort_values("Customers", ascending=False)
         )
         _ec1, _ec2 = st.columns(2)
         with _ec1:
@@ -940,16 +927,16 @@ with tab_explorer:
             st.plotly_chart(_fig_gsz, use_container_width=True)
         with _ec2:
             _fig_gus = px.bar(
-                _grp_sz, x="Group", y="Users",
-                color="Users", color_continuous_scale="Teal",
-                text=_grp_sz["Users"].map(lambda v: f"{v:,}"),
-                title="Unique users per group (active date range)",
+                _grp_sz, x="Group", y="Customers",
+                color="Customers", color_continuous_scale="Teal",
+                text=_grp_sz["Customers"].map(lambda v: f"{v:,}"),
+                title="Unique customers per group (active date range)",
             )
             _fig_gus.update_xaxes(tickangle=-30)
             _fig_gus.update_traces(textposition="outside")
             _fig_gus.update_layout(
                 coloraxis_showscale=False, height=360,
-                yaxis_range=[0, int(_grp_sz["Users"].max()) * 1.20],
+                yaxis_range=[0, int(_grp_sz["Customers"].max()) * 1.20],
             )
             st.plotly_chart(_fig_gus, use_container_width=True)
 
@@ -958,6 +945,24 @@ with tab_explorer:
 # TABLE TAB
 # ══════════════════════════════════════════════════════════
 with tab_table:
+    with st.expander("📖 How to read this table", expanded=False):
+        st.markdown("""
+> All % changes are measured over the **7-day window** between start_date and end_date. Click any column header to sort. Hover over a segment ID for its description.
+
+**Columns** show each communication touchpoint (day1, day5, …). Each cell is the **mean % change** in balance (or accounts) for customers in that segment who received that communication.
+
+**Bal%** = `(end_balance − start_balance) / start_balance` measured over the 7-day window.  
+**Acct%** = `(end_accounts − start_accounts) / start_accounts` over the same window.
+
+**Lift** (enable with the toggle) = treatment group mean minus control group mean in the same segment.  
+Positive lift = the communication *added* value beyond what would have happened anyway.  
+Strong colour = statistically significant (95% CI does not cross zero). Muted = inconclusive.
+
+**Colour scale**: Red = negative, Yellow = near zero, Green = positive. Scale is relative to the visible data range.
+
+**Blank cells** = fewer customers than the minimum-N filter, or no data for that combination.  
+**Click any column header** to sort the table by that metric.
+        """)
     # ── Row 1: comm toggle strip + show lift at right ─────────────────────────
     _n_pc = len(_all_present_comms)
     _row1 = st.columns(_n_pc + 1)
@@ -987,7 +992,7 @@ with tab_table:
         _show_metric_val = "both"
 
     with st.spinner("Computing..."):
-        tbl = build_table(df, ordered_comms, all_mode, agg_thr, comm_thr, min_n, bal_baseline_min)
+        tbl = build_table(df, ordered_comms, all_mode, min_n, bal_baseline_min)
 
     if tbl.empty:
         st.warning("No segments pass the current filters. Try adjusting filters in the sidebar.")
@@ -1000,24 +1005,164 @@ with tab_table:
             show_lift=show_lift,
             show_metric=_show_metric_val,
         )
-        components.html(html_tbl, height=680, scrolling=True)
-        st.caption(
-            "All % changes are measured over the 7-day window between start_date and end_date. "
-            "Click any column header to sort. "
-            "Hover over a segment ID for its description."
-        )
+        _tbl_h = max(300, min(680, 55 + len(tbl) * 32))
+        components.html(html_tbl, height=_tbl_h, scrolling=True)
         if show_lift:
             st.caption(
                 "🟢 **Strong color** = lift 95% CI does not cross zero (statistically significant).  "
                 "🟡 **Muted color** = CI crosses zero (direction not reliable at 95% level).  "
-                "The **\u00b1CI Lift** column shows the half-width of the 95% confidence interval."
+                "The **\u00b1CI Lift** column shows the **margin of error** (half-width) of the 95% CI. "
+                "Example: Lift = 5.0%, \u00b1CI = 2.0% → true lift is between 3.0% and 7.0% with 95% confidence."
             )
+
+        # ── Send top-N to Simulator ───────────────────────────────────────────
+        _, _hs_c1, _hs_c2, _ = st.columns([2, 1, 1, 2], vertical_alignment="bottom")
+        _hs_top_n = _hs_c1.number_input(
+            "Top N",
+            min_value=1, max_value=len(tbl), value=min(10, len(tbl)), step=1,
+            key="tbl_send_n",
+        )
+        _first_lift_tbl = f"{ordered_comms[0]}_lift_bal" if ordered_comms else None
+        if _hs_c2.button("📌 Send to Simulator", use_container_width=True):
+            if _first_lift_tbl and _first_lift_tbl in tbl.columns:
+                _top_segs = (
+                    tbl[_first_lift_tbl].dropna()
+                    .sort_values(ascending=False)
+                    .head(int(_hs_top_n))
+                    .index.astype(str)
+                    .tolist()
+                )
+            else:
+                _top_segs = tbl.index.astype(str).tolist()[:int(_hs_top_n)]
+            st.session_state["sim_segs"] = _top_segs
+            st.success(f"Sent {len(_top_segs)} segments to the Simulator tab → switch to 'Targeting Simulator'.")
+
+        # ── Segment Combo Explorer ────────────────────────────────────────────
+        st.divider()
+        st.markdown("### 🔬 Segment Combo Explorer")
+        st.caption(
+            "Finds segment pairs that **amplify** each other — customers in both segments respond "
+            "better than the best individual segment alone. "
+            "**Synergy** = combo lift − best individual lift. "
+            "Positive = combining these two segments unlocks extra response beyond targeting either alone."
+        )
+        _combo_comm = st.selectbox(
+            "Communication to analyse",
+            ordered_comms,
+            key="combo_comm",
+        )
+        # Internal constants — not exposed to users
+        _COMBO_POOL_N = 30   # top-N segments to scan pairs from
+        _COMBO_MIN_N  = 15   # minimum shared customers to include a pair
+
+        _lift_col_ce = f"{_combo_comm}_lift_bal"
+        if _lift_col_ce not in tbl.columns:
+            st.info("No lift data available for this communication.")
+        else:
+            with st.spinner("Scanning segment pairs for synergy…"):
+                from itertools import combinations as _combinations
+                _ce_pool = (
+                    tbl[_lift_col_ce].dropna()
+                    .sort_values(ascending=False)
+                    .head(_COMBO_POOL_N)
+                    .index.astype(str)
+                    .tolist()
+                )
+                _ce_ind_lifts = tbl.loc[tbl.index.isin(_ce_pool), _lift_col_ce].to_dict()
+                _ce_df_comm = df[df["communication"] == _combo_comm]
+                _ce_treated = _ce_df_comm[_ce_df_comm["contact_flag"] == 1]
+                _ce_ctrl    = _ce_df_comm[_ce_df_comm["contact_flag"] == 0]
+                # Pre-index for speed
+                _ce_t_idx = {s: set(_ce_treated[_ce_treated["nsegment"] == s]["alpha_key"]) for s in _ce_pool}
+                _ce_c_idx = {s: set(_ce_ctrl[_ce_ctrl["nsegment"] == s]["alpha_key"]) for s in _ce_pool}
+                _combo_data = []
+                for _s1, _s2 in _combinations(_ce_pool, 2):
+                    _both_t = _ce_t_idx[_s1] & _ce_t_idx[_s2]
+                    if len(_both_t) < _COMBO_MIN_N:
+                        continue
+                    _sub_t = _ce_treated[_ce_treated["alpha_key"].isin(_both_t)]
+                    _avg_t = _sub_t["balance_pct_change"].mean() if "balance_pct_change" in _sub_t.columns else np.nan
+                    _both_c = _ce_c_idx[_s1] & _ce_c_idx[_s2]
+                    _sub_c = _ce_ctrl[_ce_ctrl["alpha_key"].isin(_both_c)]
+                    _avg_c = _sub_c["balance_pct_change"].mean() if (not _sub_c.empty and "balance_pct_change" in _sub_c.columns) else np.nan
+                    _ce_combo_lift = (_avg_t - _avg_c) if pd.notna(_avg_t) and pd.notna(_avg_c) else np.nan
+                    _ce_best_ind = max(float(_ce_ind_lifts.get(_s1, np.nan)), float(_ce_ind_lifts.get(_s2, np.nan)))
+                    _ce_synergy = (_ce_combo_lift - _ce_best_ind) if pd.notna(_ce_combo_lift) and pd.notna(_ce_best_ind) else np.nan
+                    _combo_data.append({
+                        "Segments":        f"{_s1} + {_s2}",
+                        "_s1": _s1, "_s2": _s2,
+                        "N customers":     len(_both_t),
+                        "Combo Lift Bal":  _ce_combo_lift,
+                        "Best Ind. Lift":  _ce_best_ind,
+                        "Synergy":         _ce_synergy,
+                        "_lbl1": SEGMENT_LABELS.get(_s1, ""),
+                        "_lbl2": SEGMENT_LABELS.get(_s2, ""),
+                    })
+
+            if _combo_data:
+                _combo_df = pd.DataFrame(_combo_data).sort_values("Synergy", ascending=False)
+                # Scatter: X = combo lift, Y = synergy, size = N customers
+                _ce_fig = px.scatter(
+                    _combo_df,
+                    x="Combo Lift Bal",
+                    y="Synergy",
+                    size="N customers",
+                    color="Synergy",
+                    color_continuous_scale="RdYlGn",
+                    hover_name="Segments",
+                    custom_data=["_lbl1", "_lbl2", "N customers", "Best Ind. Lift"],
+                    title=f"Segment pair synergy — {_combo_comm}",
+                    labels={"Combo Lift Bal": "Combo Balance Lift", "Synergy": "Synergy (above best alone)"},
+                )
+                _ce_fig.update_traces(
+                    hovertemplate=(
+                        "<b>%{hovertext}</b><br>"
+                        "%{customdata[0]}<br>%{customdata[1]}<br>"
+                        "N: %{customdata[2]:,}<br>"
+                        "Combo lift: %{x:.1%}<br>"
+                        "Best alone: %{customdata[3]:.1%}<br>"
+                        "Synergy: %{y:.1%}<extra></extra>"
+                    )
+                )
+                _ce_fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5,
+                                  annotation_text="Synergy = 0", annotation_position="bottom right")
+                _ce_fig.update_xaxes(tickformat=".0%")
+                _ce_fig.update_yaxes(tickformat=".0%")
+                _ce_fig.update_layout(coloraxis_showscale=False, height=420)
+                st.plotly_chart(_ce_fig, use_container_width=True)
+
+                _ce_show = _combo_df[["Segments", "N customers", "Combo Lift Bal", "Best Ind. Lift", "Synergy"]].head(20).copy()
+                def _pct_ce(v): return f"{v*100:.1f}%" if pd.notna(v) else "—"
+                st.dataframe(
+                    _ce_show.style
+                    .format({"Combo Lift Bal": _pct_ce, "Best Ind. Lift": _pct_ce, "Synergy": _pct_ce, "N customers": "{:,.0f}"})
+                    .background_gradient(subset=["Combo Lift Bal", "Synergy"], cmap="RdYlGn", vmin=-0.3, vmax=0.3),
+                    use_container_width=True,
+                )
+                st.caption(f"Scanning top {_COMBO_POOL_N} segments by lift. Minimum {_COMBO_MIN_N} shared customers per pair. Top 20 shown.")
+            else:
+                st.info(f"No segment pairs with ≥{_COMBO_MIN_N} shared customers found in the current top {_COMBO_POOL_N} pool.")
 
 
 # ══════════════════════════════════════════════════════════
 # CHARTS TAB
 # ══════════════════════════════════════════════════════════
 with tab_charts:
+    with st.expander("📖 How to read the charts", expanded=False):
+        st.markdown("""
+**Bar chart** — ranks segments by the selected metric. Taller = stronger average effect. Error bars are 95% confidence intervals (wider = less certain). Use this to decide which segments to prioritise in the next campaign.
+
+**Heatmap** — segment × communication grid. Each cell = mean % change. Dark green = strong positive response. Use this to spot *which communications* work for *which segments*, and identify segments that respond early vs late in the journey.
+
+**Journey timeline** — tracks how selected segments perform at each touchpoint over time. Rising lines = improving engagement. Flat or falling lines = fatigue or declining relevance at that stage.
+
+**Violin chart** — shows the *full distribution* of individual % changes, not just the average. Wide violin = high variability (average driven by a few extreme responders). Narrow = consistent. Use this to spot segments where the mean is misleading.
+
+**KDE density explorer** — smoothed density curve, useful for comparing the *shape* of responses across segments. Separated peaks = meaningfully different groups. Overlapping peaks = similar behaviour.
+
+**Co-occurrence heatmap** — cell [A, B] = fraction of segment A customers who are *also* in segment B. Dark blue = heavy overlap. If two high-performing segments overlap heavily, targeting both wastes budget.
+        """)
+
     if "tbl" not in dir() or tbl.empty:
         st.warning("No table data — adjust filters in the Table tab.")
     else:
@@ -1155,7 +1300,7 @@ with tab_charts:
         if jt_segs:
             jt_rows = []
             for comm in ordered_comms:
-                sub = df[(df["Contact_flag"] == 1) & (df["Communication"] == comm) & (df["nsegment"].isin(jt_segs))]
+                sub = df[(df["contact_flag"] == 1) & (df["communication"] == comm) & (df["nsegment"].isin(jt_segs))]
                 for seg in jt_segs:
                     grp = sub[sub["nsegment"] == seg]
                     if not grp.empty:
@@ -1191,7 +1336,7 @@ with tab_charts:
         # ── Segment co-occurrence heatmap ────────────────────────────────────
         st.subheader("Segment Co-occurrence — how often segments share the same user")
         st.caption(
-            "**Co-occurrence heatmap** — cell [A, B] = fraction of segment A users "
+            "**Co-occurrence heatmap** — cell [A, B] = fraction of segment A customers "
             "who are also in segment B. Dark blue = heavy overlap. "
             "If two high-performing segments overlap heavily, targeting both wastes budget — "
             "pick the one with stronger lift. Also useful for building exclusion lists."
@@ -1219,13 +1364,19 @@ with tab_charts:
                 .reset_index()
             )
             n_users_total = user_seg_df["alpha_key"].nunique()
-            cooc_matrix = pd.DataFrame(0.0, index=cooc_segs, columns=cooc_segs)
-            for _, row in user_seg_df.iterrows():
-                segs = list(row["nsegment"])
-                for i, si in enumerate(segs):
-                    for sj in segs:
-                        if si in cooc_matrix.index and sj in cooc_matrix.columns:
-                            cooc_matrix.loc[si, sj] += 1
+            # Vectorised co-occurrence via indicator matrix multiplication
+            _indicator = (
+                df[df["nsegment"].isin(cooc_segs)]
+                .drop_duplicates(subset=["alpha_key", "nsegment"])
+                .assign(_v=1)
+                .pivot_table(index="alpha_key", columns="nsegment", values="_v", fill_value=0)
+            )
+            _indicator = _indicator.reindex(columns=cooc_segs, fill_value=0)
+            _vals = _indicator.values  # shape (n_users, n_segs)
+            cooc_matrix = pd.DataFrame(
+                _vals.T @ _vals,  # (n_segs, n_segs) — counts of users sharing both segments
+                index=cooc_segs, columns=cooc_segs, dtype=float,
+            )
             # Normalize by diagonal (self-count = total users in segment)
             with np.errstate(divide="ignore", invalid="ignore"):
                 diag = np.diag(cooc_matrix.values).copy()
@@ -1243,8 +1394,8 @@ with tab_charts:
                 cooc_norm_df,
                 color_continuous_scale="Blues",
                 zmin=0, zmax=1,
-                labels=dict(color="Share of row-seg users"),
-                title="Segment co-occurrence (row = % of row-segment users who also belong to col-segment)",
+                labels=dict(color="Overlap %"),
+                title="Segment co-occurrence (row = % of segment A customers who also belong to segment B)",
                 aspect="auto",
             )
             fig_cooc.update_xaxes(type="category")
@@ -1278,16 +1429,16 @@ with tab_charts:
         )
         if seg_pick:
             dv = df[
-                (df["Contact_flag"] == 1) & (df["nsegment"].isin(seg_pick))
-                & (df["Communication"].isin(ordered_comms))
+                (df["contact_flag"] == 1) & (df["nsegment"].isin(seg_pick))
+                & (df["communication"].isin(ordered_comms))
             ].dropna(subset=[_vio_col])
             if not dv.empty:
                 dv = dv.copy()
                 dv["_label"] = dv["nsegment"].astype(str)
                 fig_v = px.violin(
-                    dv, x="Communication", y=_vio_col,
+                    dv, x="communication", y=_vio_col,
                     color="_label", box=True, points=False,
-                    category_orders={"Communication": ordered_comms},
+                    category_orders={"communication": ordered_comms},
                     labels={_vio_col: _vio_label, "_label": "Segment"},
                     title=f"{_vio_label} distribution per communication",
                 )
@@ -1315,11 +1466,11 @@ with tab_charts:
             dist_metric = st.radio("Metric", ["Balance %", "Accounts %"], horizontal=True, key="dist_metric")
 
         if dist_segs:
-            dm = df[(df["Contact_flag"] == 1) & (df["nsegment"].isin(dist_segs))]
+            dm = df[(df["contact_flag"] == 1) & (df["nsegment"].isin(dist_segs))]
             if dist_comm != "All selected":
-                dm = dm[dm["Communication"] == dist_comm]
+                dm = dm[dm["communication"] == dist_comm]
             else:
-                dm = dm[dm["Communication"].isin(ordered_comms)]
+                dm = dm[dm["communication"].isin(ordered_comms)]
             metric_col = "balance_pct_change" if dist_metric == "Balance %" else "accounts_pct_change"
             dm = dm.dropna(subset=[metric_col]).copy()
             if not dm.empty:
@@ -1360,39 +1511,70 @@ with tab_simulator:
     st.caption(
         "Select any set of segments below and we'll estimate the **expected balance lift per "
         "communication** if you sent to only those customers. "
-        "Lift is N-weighted across your chosen segments: segments with more users carry more weight."
+        "Lift is N-weighted across your chosen segments: segments with more customers carry more weight."
     )
+
+    with st.expander("📖 How the numbers are calculated", expanded=False):
+        st.markdown("""
+**Lift (treatment − control)**  
+For each segment × communication cell, *lift* = mean outcome for treated customers minus mean outcome for control customers in the *same segment and communication*.  
+This isolates the causal effect of the communication, removing background trends that would have happened anyway.
+
+**N-weighted expected lift**  
+When you select multiple segments, the simulator computes a single headline lift by taking a weighted average across segments — where each segment's weight is its sample size (N).  
+Larger segments drive the headline more. Segments with no control data are excluded from the weighted average.
+
+**Projected absolute € increase**  
+Formula: `customers × avg_start_balance × lift%`  
+Example: 500 customers × €2,000 avg balance × 5% lift = €50,000 incremental increase.  
+Note: this is an *expected* estimate based on historical lift — actual results will vary.
+
+**Projected account openings**  
+Same logic: `customers × avg_start_accounts × lift%`.  
+A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per user targeted.
+        """)
 
     if "tbl" not in dir() or tbl.empty:
         st.warning("No table data — adjust filters in the Table tab first.")
     else:
         all_segs_sim = sorted(tbl.index.astype(str).tolist())
-        _default_sim = all_segs_sim[:min(10, len(all_segs_sim))]
+        # Default to top 10 by first comm's balance lift (most actionable)
+        _first_lift = f"{ordered_comms[0]}_lift_bal" if ordered_comms else None
+        if _first_lift and _first_lift in tbl.columns:
+            _default_sim = tbl[_first_lift].dropna().sort_values(ascending=False).head(10).index.astype(str).tolist()
+        else:
+            _default_sim = all_segs_sim[:min(10, len(all_segs_sim))]
 
-        _sc1, _sc2 = st.columns([3, 1])
-        with _sc1:
-            sim_segs = st.multiselect(
-                "Segments to include in the simulation",
-                options=all_segs_sim,
-                default=_default_sim,
-                format_func=lambda x: f"{x}  —  {SEGMENT_LABELS.get(x, x)}" if SEGMENT_LABELS.get(x) else x,
-                key="sim_segs",
-            )
-        with _sc2:
-            sim_metric = st.radio(
-                "Metric",
-                ["Balance % lift", "Accounts % lift"],
-                key="sim_metric",
-            )
-        _lift_suffix = "_lift_bal" if sim_metric == "Balance % lift" else "_lift_acct"
-        _raw_suffix  = "_bal"      if sim_metric == "Balance % lift" else "_acct"
-        _y_label     = "Expected Balance Lift %" if sim_metric == "Balance % lift" else "Expected Accounts Lift %"
+        sim_segs = st.multiselect(
+            "Segments to include in the simulation",
+            options=all_segs_sim,
+            default=_default_sim,
+            format_func=lambda x: x,
+            key="sim_segs",
+        )
 
-        if sim_segs:
+        # Exclude multiselect
+        _excl_options = [s for s in all_segs_sim if s not in (sim_segs or [])]
+        sim_segs_excl = st.multiselect(
+            "Segments to EXCLUDE (override — removes these from the analysis even if included above)",
+            options=all_segs_sim,
+            default=[s for s in st.session_state.get("sim_segs_excl", []) if s in all_segs_sim],
+            format_func=lambda x: x,
+            key="sim_segs_excl",
+            help="Any segment listed here is excluded from all calculations, even if it appears in the inclusion list above.",
+        )
+        # Effective included segments = included minus excluded
+        _sim_segs_eff = [s for s in (sim_segs or []) if s not in sim_segs_excl]
+
+        if st.button("▶ Run simulation", key="sim_run_btn", type="primary"):
+            st.session_state["sim_run_triggered"] = True
+        sim_metric = st.session_state.get("sim_metric", "Balance % lift")
+
+        if st.session_state.get("sim_run_triggered") and _sim_segs_eff:
             # ── Pre-filter table rows and compute projected metrics ───────────
-            sub_all = tbl.loc[tbl.index.isin(sim_segs)].copy()
+            sub_all = tbl.loc[tbl.index.isin(_sim_segs_eff)].copy()
             _sim_total_users = df[
-                (df["Contact_flag"] == 1) & (df["nsegment"].isin(sim_segs))
+                (df["contact_flag"] == 1) & (df["nsegment"].isin(_sim_segs_eff))
             ]["alpha_key"].nunique()
 
             def _w_avg(col, n_vals):
@@ -1423,9 +1605,9 @@ with tab_simulator:
                 w_raw  = w_raw_bal   if sim_metric == "Balance % lift" else w_raw_acct
 
                 _comm_df  = df[
-                    (df["Contact_flag"] == 1)
-                    & (df["Communication"] == comm)
-                    & (df["nsegment"].isin(sim_segs))
+                    (df["contact_flag"] == 1)
+                    & (df["communication"] == comm)
+                    & (df["nsegment"].isin(_sim_segs_eff))
                 ]
                 _per_user = _comm_df.groupby("alpha_key")[["start_balance", "start_accounts"]].first()
                 _comm_n_u = len(_per_user)
@@ -1450,10 +1632,18 @@ with tab_simulator:
                            .drop(columns="_rank")
                            .reset_index(drop=True))
 
-            st.metric(
-                "Total unique users (all selected segments)",
+            _excl_note = f" ({len(sim_segs_excl)} excluded)" if sim_segs_excl else ""
+            _tot_c1, _tot_c2 = st.columns([2, 1])
+            _tot_c1.metric(
+                "Total unique customers (all selected segments)" + _excl_note,
                 f"{_sim_total_users:,}",
+                help="Unique people (alpha_key) who were contacted and appear in at least one of the selected segments.",
             )
+            with _tot_c2:
+                st.radio("Metric", ["Balance % lift", "Accounts % lift"], key="sim_metric", horizontal=True)
+            _lift_suffix = "_lift_bal" if sim_metric == "Balance % lift" else "_lift_acct"
+            _raw_suffix  = "_bal"      if sim_metric == "Balance % lift" else "_acct"
+            _y_label     = "Expected Balance Lift %" if sim_metric == "Balance % lift" else "Expected Accounts Lift %"
 
             # Show kpi metrics row
             st.markdown("#### Expected lift across selected segments")
@@ -1462,11 +1652,18 @@ with tab_simulator:
                 lift_val = row["Expected Lift"]
                 label    = row["Communication"]
                 n_val    = int(row["Total N"]) if pd.notna(row["Total N"]) else 0
-                delta_str = f"{n_val:,} users"
+                u_val    = int(row["Comm Users"]) if pd.notna(row.get("Comm Users")) else 0
+                delta_str = f"{n_val:,} segment-rows"
+                _kpi_help = (
+                    f"**Total N = {n_val:,}** — sum of per-segment sample sizes. "
+                    f"A customer in {len(_sim_segs_eff)} segments counts {len(_sim_segs_eff)}×. "
+                    f"**Comm Users = {u_val:,}** — unique persons who received this communication "
+                    f"(used in the projection below). Both figures are correct; they measure different things."
+                )
                 if pd.notna(lift_val):
-                    kpi_cols[i].metric(label, f"{lift_val:.2%}", delta_str)
+                    kpi_cols[i].metric(label, f"{lift_val:.2%}", delta_str, help=_kpi_help)
                 else:
-                    kpi_cols[i].metric(label, "—", delta_str)
+                    kpi_cols[i].metric(label, "—", delta_str, help=_kpi_help)
 
             # Projected row — only show the metric matching the selected metric
             if sim_metric == "Balance % lift":
@@ -1478,7 +1675,11 @@ with tab_simulator:
                     proj_b_cols[i].metric(
                         row["Communication"],
                         f"\u20ac{pv:,.0f}" if pd.notna(pv) else "—",
-                        f"{nu:,} users",
+                        f"{nu:,} unique customers",
+                        help=(
+                            f"Formula: unique customers × avg start balance × lift%. "
+                            f"Uses {nu:,} *unique* persons (not segment-rows) as the headcount."
+                        ),
                     )
             else:
                 st.markdown("#### Projected account openings")
@@ -1489,7 +1690,11 @@ with tab_simulator:
                     proj_a_cols[i].metric(
                         row["Communication"],
                         f"{av:,.0f}" if pd.notna(av) else "—",
-                        f"{nu:,} users",
+                        f"{nu:,} unique customers",
+                        help=(
+                            f"Formula: unique customers × avg start accounts × lift%. "
+                            f"Uses {nu:,} *unique* persons as the headcount."
+                        ),
                     )
 
             st.divider()
@@ -1499,7 +1704,7 @@ with tab_simulator:
             _c_sim_cap, _c_sim_tog = st.columns([6, 2])
             _c_sim_cap.caption(
                 "Each cell shows the lift (treatment \u2212 control) for that segment \u00d7 communication. "
-                "Blank = no control data or fewer users than the minimum N filter. "
+                "Blank = no control data or fewer customers than the minimum N filter. "
                 "Hover a segment ID for its description."
             )
             _show_sim_n = _c_sim_tog.toggle("Show sample size", value=False, key="sim_show_n")
@@ -1511,7 +1716,7 @@ with tab_simulator:
                     _intl_cols.append(f"{c}{_lift_suffix}")
                 if _show_sim_n and f"{c}_n" in tbl.columns:
                     _intl_cols.append(f"{c}_n")
-            detail = tbl.loc[tbl.index.isin(sim_segs), [c for c in _intl_cols if c in tbl.columns]].copy()
+            detail = tbl.loc[tbl.index.isin(_sim_segs_eff), [c for c in _intl_cols if c in tbl.columns]].copy()
             detail.index.name = "Segment"
 
             col_rename_sim = {f"{c}{_lift_suffix}": c for c in ordered_comms}
@@ -1545,105 +1750,158 @@ with tab_simulator:
                 _styled_html_table(styler_sim, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_sim_h),
                 height=_sim_h, scrolling=True,
             )
-        else:
-            st.info("Select at least one segment above to run the simulation.")
 
-
-# ══════════════════════════════════════════════════════════
-# EXPORT TAB
-# ══════════════════════════════════════════════════════════
-with tab_export:
-    if "tbl" not in dir() or tbl.empty:
-        st.warning("No table data — adjust filters in the Table tab first.")
-    else:
-        _n_segs  = len(tbl)
-        _n_comms = len(ordered_comms)
-        _n_cols  = len(tbl.columns)
-
-        # ── Header ───────────────────────────────────────────────────────────
-        st.markdown("## Export data")
-        st.caption(
-            f"Current view: **{_n_segs}** segments · **{_n_comms}** communications · **{_n_cols}** columns. "
-            "Choose a format below."
-        )
-        st.divider()
-
-        # ── Download cards ────────────────────────────────────────────────────
-        xc1, xc2, xc3 = st.columns(3)
-
-        with xc1:
-            st.markdown("**CSV**")
-            csv_bytes = tbl.reset_index().to_csv(index=False).encode("utf-8")
+            # ── Excel export of selection ─────────────────────────────────────
+            st.divider()
+            st.markdown("#### 📥 Export selection")
+            _exp_rows = [
+                {
+                    "nsegment":    s,
+                    "label":       SEGMENT_LABELS.get(s, ""),
+                    "description": SEGMENT_DESCRIPTIONS.get(s, ""),
+                    "status":      "INCLUDED",
+                }
+                for s in _sim_segs_eff
+            ] + [
+                {
+                    "nsegment":    s,
+                    "label":       SEGMENT_LABELS.get(s, ""),
+                    "description": SEGMENT_DESCRIPTIONS.get(s, ""),
+                    "status":      "EXCLUDED",
+                }
+                for s in sim_segs_excl
+            ]
+            _exp_df = pd.DataFrame(_exp_rows, columns=["nsegment", "label", "description", "status"])
+            _exp_buf = io.BytesIO()
+            with pd.ExcelWriter(_exp_buf, engine="xlsxwriter") as _ew:
+                _exp_df.to_excel(_ew, sheet_name="Selection", index=False)
+                # Add summary sheet
+                sim_summary.to_excel(_ew, sheet_name="Summary", index=False)
+            _exp_buf.seek(0)
             st.download_button(
-                "Download CSV",
-                csv_bytes, "segment_table.csv", "text/csv",
-                use_container_width=True,
+                "Download Excel (.xlsx)",
+                _exp_buf.read(),
+                file_name="targeting_selection.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                help="Exports two sheets: 'Selection' (one row per segment with INCLUDED/EXCLUDED status) and 'Summary' (lift + projection per communication).",
+            )
+        elif st.session_state.get("sim_run_triggered") and not _sim_segs_eff:
+            st.warning("No segments to analyse — all included segments are also in the exclude list. Remove some exclusions.")
+
+        st.divider()
+        st.markdown("### 💡 Recommended Audiences")
+        st.caption(
+            "Optimal segment groupings for each communication, ranked by lift. "
+            "Use these as ready-made targeting lists — no manual segment selection needed."
+        )
+
+        _ra_c1, _ra_c2, _ra_c3 = st.columns([2, 2, 1])
+        with _ra_c1:
+            ra_metric = st.radio(
+                "Optimise for", ["Balance lift", "Accounts lift"],
+                horizontal=True, key="ra_metric",
+            )
+        with _ra_c2:
+            ra_comm = st.selectbox(
+                "Communication", ["All (compare)", *ordered_comms], key="ra_comm",
+            )
+        with _ra_c3:
+            ra_top_n = st.number_input(
+                "Top N segments", min_value=3, max_value=50, value=10, step=1, key="ra_top_n",
             )
 
-        with xc2:
-            st.markdown("**Excel (.xlsx)**")
-            try:
-                xlsx_bytes = build_excel(tbl, ordered_comms)
-                st.download_button(
-                    "Download Excel",
-                    xlsx_bytes, "segment_table.xlsx",
-                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
+        ra_suffix = "_lift_bal" if ra_metric == "Balance lift" else "_lift_acct"
+        ra_label  = "Balance Lift %" if ra_metric == "Balance lift" else "Accounts Lift %"
+
+        def _pct_fmt_ra(v):
+            if pd.isna(v): return "—"
+            return f"{v * 100:.1f}%"
+
+        if ra_comm == "All (compare)":
+            _ra_frames: Dict[str, pd.Series] = {}
+            for _rc in ordered_comms:
+                _col = f"{_rc}{ra_suffix}"
+                if _col in tbl.columns:
+                    _ra_frames[_rc] = tbl[_col].dropna().sort_values(ascending=False).head(int(ra_top_n))
+            if _ra_frames:
+                _ra_all_segs = list(dict.fromkeys(s for fr in _ra_frames.values() for s in fr.index))
+                _ra_matrix = pd.DataFrame(
+                    {c: fr.reindex(_ra_all_segs) for c, fr in _ra_frames.items()},
+                    index=_ra_all_segs,
                 )
-            except Exception as e:
-                st.error(f"Excel error: {e}")
-
-        with xc3:
-            st.markdown("**PowerPoint (.pptx)**")
-            try:
-                pptx_bytes = build_pptx(tbl, ordered_comms)
-                st.download_button(
-                    "Download PowerPoint",
-                    pptx_bytes, "segment_report.pptx",
-                    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
-                    use_container_width=True,
+                _ra_matrix.index.name = "Segment"
+                _ra_styler = (
+                    _ra_matrix.style
+                    .format(_pct_fmt_ra, na_rep="—")
+                    .apply(lambda s: s.map(_rdylgn), axis=0)
                 )
-            except Exception as e:
-                st.error(f"PowerPoint error: {e}")
+                _ra_h = max(300, min(680, 60 + len(_ra_matrix) * 28))
+                components.html(
+                    _styled_html_table(_ra_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_h),
+                    height=_ra_h, scrolling=True,
+                )
 
-        st.divider()
+            else:
+                st.info("No lift data available for the current communication selection.")
+        else:
+            _ra_col   = f"{ra_comm}{ra_suffix}"
+            _ra_n_col = f"{ra_comm}_n"
+            if _ra_col in tbl.columns:
+                _ra_top    = tbl[_ra_col].dropna().sort_values(ascending=False).head(int(ra_top_n))
+                _ra_n_vals = tbl.loc[_ra_top.index, _ra_n_col].fillna(0) if _ra_n_col in tbl.columns else pd.Series(1.0, index=_ra_top.index)
+                _ra_total_n = _ra_n_vals.sum()
+                _ra_w_lift  = float((_ra_top * _ra_n_vals).sum() / _ra_total_n) if _ra_total_n > 0 else np.nan
+                _ra_n_dict  = _ra_n_vals.to_dict()
+                _ra_users   = df[
+                    (df["contact_flag"] == 1)
+                    & (df["communication"] == ra_comm)
+                    & (df["nsegment"].isin(_ra_top.index))
+                ]["alpha_key"].nunique()
+                _rm1, _rm2 = st.columns(2)
+                _rm1.metric("Recommended audience", f"{_ra_users:,} customers")
+                _rm2.metric(f"Expected {ra_label}", f"{_ra_w_lift:.2%}" if pd.notna(_ra_w_lift) else "—")
+                _ra_detail = pd.DataFrame({
+                    "Label":  [SEGMENT_LABELS.get(str(s), "") for s in _ra_top.index],
+                    ra_label: _ra_top.values,
+                    "N":      [int(_ra_n_dict.get(s, 0)) for s in _ra_top.index],
+                }, index=_ra_top.index)
+                _ra_detail.index.name = "Segment"
+                _ra_styler2 = (
+                    _ra_detail.style
+                    .format({ra_label: _pct_fmt_ra, "N": "{:,.0f}"}, na_rep="")
+                    .apply(lambda s: s.map(_rdylgn), subset=[ra_label], axis=0)
+                    .apply(lambda s: s.map(_n_color), subset=["N"], axis=0)
+                )
+                _ra_h2 = max(300, min(600, 60 + len(_ra_detail) * 30))
+                components.html(
+                    _styled_html_table(_ra_styler2, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_h2),
+                    height=_ra_h2, scrolling=True,
+                )
+                st.caption(
+                    f"Top {int(ra_top_n)} segments for **{ra_comm}** by {ra_label}. "
+                    "Hover a segment ID for its description."
+                )
+            else:
+                st.info(f"No {ra_label} data available for **{ra_comm}**.")
 
-        # ── Data preview ─────────────────────────────────────────────────────
-        st.markdown("**Preview data**")
-        _prev_tbl = tbl.head(10)
-        _pct_cols_prev = [c for c in _prev_tbl.columns if any(c.endswith(s) for s in ("_bal", "_acct", "_lift_bal", "_lift_acct"))]
-        _n_cols_prev   = [c for c in _prev_tbl.columns if c.endswith("_n") or c == "agg_n"]
-        _prev_fmt = {c: (lambda v: f"{v*100:.1f}%" if pd.notna(v) else "") for c in _pct_cols_prev}
-        _prev_fmt.update({c: "{:,.0f}" for c in _n_cols_prev if c in _prev_tbl.columns})
-        _prev_styler = _prev_tbl.style.format(_prev_fmt, na_rep="")
-        if _pct_cols_prev:
-            _prev_styler = _prev_styler.apply(lambda s: s.map(_rdylgn), subset=_pct_cols_prev, axis=0)
-        if _n_cols_prev:
-            _prev_styler = _prev_styler.apply(lambda s: s.map(_n_color), subset=_n_cols_prev, axis=0)
-        _prev_h = max(300, min(500, 80 + len(_prev_tbl) * 28))
-        components.html(
-            _styled_html_table(_prev_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_prev_h),
-            height=_prev_h, scrolling=True,
-        )
-        st.caption(f"Showing first 10 of {_n_segs} segments.")
 
 
 # ══════════════════════════════════════════════════════════
-# AUDIT TAB
+# DATA QUALITY TAB
 # ══════════════════════════════════════════════════════════
 with tab_audit:
-    st.subheader("Tool Audit & Recommendations")
-    st.caption("Live analysis of the current dataset and active filter settings.")
+    st.subheader("Data Quality & Recommendations")
+    st.caption("Live health check of your dataset and current filter settings.")
 
     k1, k2, k3, k4 = st.columns(4)
     n_rows_raw   = len(df_raw)
     n_users_raw  = df_raw["alpha_key"].nunique() if "alpha_key" in df_raw.columns else 0
     n_segs       = df["nsegment"].nunique()
-    contact_rate = df_raw["Contact_flag"].mean() if "Contact_flag" in df_raw.columns else 0
-    k1.metric("Total rows",      f"{n_rows_raw:,}")
-    k2.metric("Unique users",    f"{n_users_raw:,}")
-    k3.metric("Unique segments", f"{n_segs:,}")
-    k4.metric("Contact rate",    f"{contact_rate:.1%}")
+    contact_rate = df_raw["contact_flag"].mean() if "contact_flag" in df_raw.columns else 0
+    k1.metric("Total records",       f"{n_rows_raw:,}")
+    k2.metric("Unique customers",    f"{n_users_raw:,}")
+    k3.metric("Unique segments",     f"{n_segs:,}")
+    k4.metric("Contacted %",         f"{contact_rate:.1%}")
 
     st.divider()
 
@@ -1651,30 +1909,23 @@ with tab_audit:
         nan_bal  = df["balance_pct_change"].isna().mean()
         nan_acct = df["accounts_pct_change"].isna().mean()
         zero_bal = (df["start_balance"].fillna(0) < 1).mean()
-        dup_pct  = df.duplicated(subset=["alpha_key", "Communication", "nsegment"]).mean()
+        dup_pct  = df.duplicated(subset=["alpha_key", "communication", "nsegment"]).mean()
         dq1, dq2, dq3, dq4 = st.columns(4)
-        dq1.metric("Balance % NaN rate",     f"{nan_bal:.1%}")
-        dq2.metric("Accounts % NaN rate",    f"{nan_acct:.1%}")
-        dq3.metric("Near-zero balance rows", f"{zero_bal:.1%}")
-        dq4.metric("Duplicate rows",         f"{dup_pct:.1%}")
+        dq1.metric("Balance data missing",    f"{nan_bal:.1%}")
+        dq2.metric("Accounts data missing",   f"{nan_acct:.1%}")
+        dq3.metric("Near-zero balances",       f"{zero_bal:.1%}")
+        dq4.metric("Duplicate records",        f"{dup_pct:.1%}")
         date_min_v = df["start_date"].min()
         date_max_v = df["end_date"].max()
         st.caption(f"Date range: **{date_min_v.date() if pd.notna(date_min_v) else 'N/A'}** → **{date_max_v.date() if pd.notna(date_max_v) else 'N/A'}**")
 
-    with st.expander("⚠️ Methodology Risks", expanded=True):
-        slider_active = (agg_thr[0] > -1.0 or agg_thr[1] > -1.0
-                         or any(v[0] > -1.0 or v[1] > -1.0 for v in comm_thr.values()))
-        if slider_active:
-            st.warning("**Survivorship bias active.** Threshold sliders above −100% inflate results.")
-        else:
-            st.success("✓ No threshold filters active.")
-
+    with st.expander("⚠️ Methodology Notes", expanded=True):
         if bal_baseline_min is not None:
             st.info(f"**Low-balance filter active**: segments with avg starting balance < €{bal_baseline_min:,.0f} excluded from ranking.")
 
         st.markdown("**Control group coverage per communication:**")
         ctrl_cov = (
-            df.groupby("Communication")["Contact_flag"]
+            df.groupby("communication")["contact_flag"]
             .apply(lambda x: (x == 0).mean())
             .reindex(COMM_ORDER).dropna().rename("Control %").to_frame()
         )
@@ -1694,7 +1945,7 @@ with tab_audit:
         overlap     = df.groupby("alpha_key")["nsegment"].nunique()
         multi_pct   = (overlap > 1).mean()
         avg_segs_u  = overlap.mean()
-        st.info(f"**Segment overlap:** {multi_pct:.1%} of users in >1 segment (avg {avg_segs_u:.1f}/user).")
+        st.info(f"**Segment overlap:** {multi_pct:.1%} of customers in >1 segment (avg {avg_segs_u:.1f}/customer).")
 
     with st.expander("🏆 Top Segment Recommendations", expanded=True):
         if "tbl" not in dir() or tbl.empty:
