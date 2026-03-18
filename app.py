@@ -828,7 +828,7 @@ with st.sidebar:
             help="Removes the most extreme values at both ends. 5 = clip below 5th and above 95th percentile.",
         )
         st.markdown("---")
-        _BAL_BASELINE_MIN = 50
+        _BAL_BASELINE_MIN = 5
         bal_baseline_min = float(_BAL_BASELINE_MIN)
         st.info(f"⚠️ Low-balance filter: segments where avg starting balance < €{_BAL_BASELINE_MIN:,} are excluded from rankings.")
 
