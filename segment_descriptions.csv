@@ -1,151 +1,41 @@
 nsegment,label,description
-1000000,High-net-worth,Balance >EUR50k - premium card holder - low digital engagement
-1000001,High-net-worth,Balance >EUR50k - active investor - securities account linked
-1000002,High-net-worth,Balance >EUR50k - mortgage holder - estate planning interest
-1000003,High-net-worth,Balance >EUR50k - recent large deposit - liquidity event
-1000004,High-net-worth,Balance >EUR50k - multi-currency - regular international transfers
-1000005,High-net-worth,Balance >EUR50k - business owner - dual personal and SME accounts
-1000006,High-net-worth,Balance >EUR50k - frequent FX transactions - high travel spend
-1000007,High-net-worth,Balance >EUR50k - long tenure 10yr+ - loyal private client
-1000008,High-net-worth,Balance >EUR50k - new to segment - recent significant balance uplift
-1000009,High-net-worth,Balance >EUR50k - pension drawdown phase - income reinvestment
-1000010,Mass affluent,Balance EUR10k-50k - growing savings trajectory - monthly surplus
-1000011,Mass affluent,Balance EUR10k-50k - active fund purchases - medium risk appetite
-1000012,Mass affluent,Balance EUR10k-50k - property purchase planned - mortgage pending
-1000013,Mass affluent,Balance EUR10k-50k - stable mid-career professional - regular income
-1000014,Mass affluent,Balance EUR10k-50k - dual income household - joint financial goals
-1000015,Mass affluent,Balance EUR10k-50k - recent bonus deposit - lump sum received
-1000016,Mass affluent,Balance EUR10k-50k - monthly standing order to savings - disciplined
-1000017,Mass affluent,Balance EUR10k-50k - credit card cleared in full every month
-1000018,Mass affluent,Balance EUR10k-50k - recently adopted digital channels - mobile-first
-1000019,Mass affluent,Balance EUR10k-50k - approaching EUR50k - upgrade candidate
-1000020,Core savers,Balance EUR3k-10k - steady growth quarter-on-quarter - active saver
-1000021,Core savers,Balance EUR3k-10k - saving for home deposit - 2-year horizon
-1000022,Core savers,Balance EUR3k-10k - regular pension contributor - long-term planner
-1000023,Core savers,Balance EUR3k-10k - three or more direct debits - organised finances
-1000024,Core savers,Balance EUR3k-10k - savings and current account active - split banking
-1000025,Core savers,Balance EUR3k-10k - auto-transfer to savings monthly - automated habit
-1000026,Core savers,Balance EUR3k-10k - emergency fund builder - no revolving credit
-1000027,Core savers,Balance EUR3k-10k - moderate app usage - prefers self-service
-1000028,Core savers,Balance EUR3k-10k - balance near EUR10k ceiling - cross-sell ready
-1000029,Core savers,Balance EUR3k-10k - recent competitor switcher - acquisition win
-1000030,Low balance,Balance <EUR1k - frequent low-value transactions - fee-sensitive
-1000031,Low balance,Balance <EUR1k - student account - high long-term lifetime value
-1000032,Low balance,Balance <EUR1k - seasonal income worker - irregular deposit pattern
-1000033,Low balance,Balance <EUR1k - occasional overdraft user - repayment behaviour tracked
-1000034,Low balance,Balance <EUR1k - recently opened - low initial deposit - nurture phase
-1000035,Low balance,Balance <EUR1k - multiple micro-transactions daily - digital wallet user
-1000036,Low balance,Balance <EUR1k - digital wallet primary payment method
-1000037,Low balance,Balance <EUR1k - month-end balance spike - payroll-dependent rhythm
-1000038,Low balance,Balance <EUR1k - credit product holder - active balance management
-1000039,Low balance,Balance <EUR1k - recovery phase - previously overdrawn - improving
-1000040,New clients,Account <6 months - acquired via referral - high conversion potential
-1000041,New clients,Account <6 months - acquired via online campaign - digital onboarding
-1000042,New clients,Account <6 months - branch walk-in acquisition - needs digital nudge
-1000043,New clients,Account <6 months - initial deposit >EUR5k - strong financial start
-1000044,New clients,Account <6 months - initial deposit <EUR500 - cautious early adopter
-1000045,New clients,Account <6 months - direct debit already set up - commitment signal
-1000046,New clients,Account <6 months - no additional products yet - onboarding pending
-1000047,New clients,Account <6 months - app activated - digital-first engagement
-1000048,New clients,Account <6 months - contacted support early - proactive relationship
-1000049,New clients,Account <6 months - second product added - fast engager - upsell ready
-1000050,Multi-product,">3 products - mortgage, savings, card and insurance bundle"
-1000051,Multi-product,>3 products - 4 active products - no obvious cross-sell gap
-1000052,Multi-product,>3 products - 5 products - premium tier eligibility confirmed
-1000053,Multi-product,">3 products - savings bond, pension and current account"
-1000054,Multi-product,>3 products - business and personal accounts - dual relationship
-1000055,Multi-product,>3 products - travel card and FX account both active
-1000056,Multi-product,">3 products - auto-loan, credit card and savings - diversified"
-1000057,Multi-product,>3 products - recent product addition - growing engagement trend
-1000058,Multi-product,>3 products - product renewal due within 90 days - retention alert
-1000059,Multi-product,>3 products - super-engaged - 6 or more products active
-1000060,Mortgage,Active mortgage - overpaying - early repayment risk flag
-1000061,Mortgage,Active mortgage - fixed rate ending in 6 months - retention priority
-1000062,Mortgage,Active mortgage - first-time buyer - 90% LTV - high support need
-1000063,Mortgage,Active mortgage - buy-to-let investor - single rental property
-1000064,Mortgage,Active mortgage - remortgage candidate - rate review due
-1000065,Mortgage,Active mortgage - home mover - bridging finance in place
-1000066,Mortgage,Active mortgage - joint account holders - couple financial profile
-1000067,Mortgage,Active mortgage - high equity - potential equity release opportunity
-1000068,Mortgage,Active mortgage - payment holiday history - monitored account
-1000069,Mortgage,Active mortgage - multi-property portfolio - landlord segment
-1000070,CC revolvers,High CC utilisation - balance transfer target - paying high APR
-1000071,CC revolvers,High CC utilisation - consistent minimum payer - debt concern flag
-1000072,CC revolvers,High CC utilisation - recent credit limit increase - risk review
-1000073,CC revolvers,High CC utilisation - multiple cards - consolidation loan candidate
-1000074,CC revolvers,High CC utilisation - recent missed payment - early delinquency risk
-1000075,CC revolvers,High CC utilisation - reward card heavy spender - loyalty programme
-1000076,CC revolvers,High CC utilisation - utilisation >80% - financial stress indicator
-1000077,CC revolvers,High CC utilisation - improving repayment trend last 3 months
-1000078,CC revolvers,High CC utilisation - travel spend dominant - frequent flyer profile
-1000079,CC revolvers,High CC utilisation - recent cash advance - liquidity pressure signal
-1000080,Digital-only,No branch visits - app daily active user - push notifications on
-1000081,Digital-only,No branch visits - web-only access - no mobile app installed
-1000082,Digital-only,No branch visits - instant transfer power user - real-time banking
-1000083,Digital-only,No branch visits - open banking integrations active - fintech user
-1000084,Digital-only,No branch visits - chatbot support preference - low human contact
-1000085,Digital-only,No branch visits - digital mortgage application in progress
-1000086,Digital-only,No branch visits - card controls via app - high security awareness
-1000087,Digital-only,No branch visits - fully paperless - all communications digital
-1000088,Digital-only,No branch visits - biometric login enabled - security-conscious
-1000089,Digital-only,No branch visits - digital savings pots active - goal-based saving
-1000090,Seniors 65+,Age 65+ - pension income primary inflow - stable spending pattern
-1000091,Seniors 65+,Age 65+ - joint account with spouse - shared financial management
-1000092,Seniors 65+,Age 65+ - health-related spending increase - care planning phase
-1000093,Seniors 65+,Age 65+ - branch-dependent - low digital adoption - assisted service
-1000094,Seniors 65+,Age 65+ - recent legacy transfer received - wealth redistribution
-1000095,Seniors 65+,Age 65+ - annuity income - regular scheduled withdrawals
-1000096,Seniors 65+,Age 65+ - preference for gilts and bonds - low-risk investment
-1000097,Seniors 65+,Age 65+ - long tenure 20yr+ - highest loyalty tier
-1000098,Seniors 65+,Age 65+ - power-of-attorney on file - assisted account management
-1000099,Seniors 65+,Age 65+ - recently bereaved - account restructuring in progress
-1000100,Young adults,Age 18-25 - student loan recipient - tight monthly budget
-1000101,Young adults,Age 18-25 - first employment - salary under EUR20k - growing potential
-1000102,Young adults,Age 18-25 - gig economy worker - irregular income - variable balance
-1000103,Young adults,Age 18-25 - high app engagement - digital native - mobile-first
-1000104,Young adults,Age 18-25 - rent payer - no savings yet - financial education need
-1000105,Young adults,Age 18-25 - first credit card holder - low limit - habit forming
-1000106,Young adults,Age 18-25 - living at home - saving for independence - goal-driven
-1000107,Young adults,Age 18-25 - international student - FX needs - overseas transfers
-1000108,Young adults,Age 18-25 - apprentice - expected monthly salary growth
-1000109,Young adults,Age 18-25 - recent graduate - career starter - high lifetime value
-1000110,SME/Business,Business account - sole trader - annual revenue under EUR100k
-1000111,SME/Business,Business account - limited company - 2 to 5 employees - growing
-1000112,SME/Business,Business account - seasonal business - cash-flow peaks in summer
-1000113,SME/Business,Business account - retail merchant - card terminal and POS user
-1000114,SME/Business,Business account - professional services - regular invoice cycle
-1000115,SME/Business,Business account - import/export - frequent FX transactions
-1000116,SME/Business,Business account - franchise operator - multi-site presence
-1000117,SME/Business,Business account - startup under 1 year old - high support need
-1000118,SME/Business,Business account - established SME 10yr+ - expansion phase
-1000119,SME/Business,Business account - e-commerce seller - high daily transaction volume
-1000120,Payroll,Salary domiciliated - public sector employee - guaranteed stable income
-1000121,Payroll,Salary domiciliated - private sector mid-income - steady career
-1000122,Payroll,Salary domiciliated - high earner over EUR80k - private banking adjacent
-1000123,Payroll,Salary domiciliated - part-time salary - supplementary income sources
-1000124,Payroll,Salary domiciliated - recently switched - new salary mandate obtained
-1000125,Payroll,Salary domiciliated - commission-based - variable monthly income peaks
-1000126,Payroll,Salary domiciliated - dual salary household - both partners banking here
-1000127,Payroll,Salary domiciliated - salary plus rental income - diversified inflows
-1000128,Payroll,Salary domiciliated - regular overseas salary transfer - expat profile
-1000129,Payroll,Salary domiciliated - long-term salary customer 10yr+ - loyal anchor
-1000130,Inactive,Dormant 180+ days - zero transactions - fee waiver at risk
-1000131,Inactive,Dormant - last standing order lapsed - no replacement activity
-1000132,Inactive,Dormant - balance over EUR5k retained - passive win-back opportunity
-1000133,Inactive,Dormant - likely moved abroad - account untouched - contact stale
-1000134,Inactive,Dormant - reason unknown - win-back campaign target
-1000135,Inactive,Dormant - previous complaint recorded - relationship repair needed
-1000136,Inactive,Dormant - email unreachable - contact data requires refresh
-1000137,Inactive,Dormant - seasonal pattern - typically reactivates in Q4
-1000138,Inactive,Dormant - fee exemption removal flagged - action required
-1000139,Inactive,Dormant - win-back attempt made - no response yet - escalate
-1000140,Churn-risk,Churn risk - cancelled insurance product last month - early warning
-1000141,Churn-risk,Churn risk - balance declining trend over 6 months - outflow pattern
-1000142,Churn-risk,Churn risk - competitor account detected via FX activity
-1000143,Churn-risk,Churn risk - NPS detractor - recent poor service experience
-1000144,Churn-risk,Churn risk - repeated support complaints - dissatisfied customer
-1000145,Churn-risk,Churn risk - card fees triggered - close-account request expected
-1000146,Churn-risk,Churn risk - direct debits migrating to competitor - critical signal
-1000147,Churn-risk,Churn risk - digital engagement dropping - disengagement trend
-1000148,Churn-risk,Churn risk - salary no longer domiciliated - anchor product lost
-1000149,Churn-risk,Churn risk - account closure requested - win-back window open now
+1000000,High-net-worth,Balance >EUR50k — premium card holder
+1000001,High-net-worth,Balance >EUR50k — investment products
+1000002,High-net-worth,Balance >EUR50k — mortgage & savings
+1000003,Young professional,"Age 25-35, salary deposited monthly"
+1000004,Young professional,"Age 25-35, mobile-first engagement"
+1000005,Young professional,"Age 25-35, first mortgage applicant"
+1000006,Mortgage holder,"Outstanding mortgage, <10 yrs remaining"
+1000007,Mortgage holder,"Outstanding mortgage, >10 yrs remaining"
+1000008,Mortgage holder,Mortgage + insurance bundle
+1000009,Recent opener,Account opened <90 days ago
+1000010,Recent opener,"Account opened <90 days, first deposit"
+1000011,Pensioner,"Age >65, regular pension income"
+1000012,Pensioner,"Age >65, care package products"
+1000013,Pensioner,"Age >65, savings-focused"
+1000014,SME owner,Business current account holder
+1000015,SME owner,Business account + credit line
+1000016,Multi-product,Holds 3+ product types
+1000017,Multi-product,Holds 4+ product types
+1000018,Multi-product,Holds 5+ product types
+1000019,Digital-only,No branch visits in 12 months
+1000020,Digital-only,"App-only customer, no card swipes in-branch"
+1000021,Digital-only,"All interactions digital, high login frequency"
+1000022,Dormant,No transactions in 6-12 months
+1000023,Dormant,No transactions in >12 months
+1000024,Student,Enrolled in student programme
+1000025,Student,Student loan or overdraft active
+1000026,Savings-first,Primary account is savings account
+1000027,Savings-first,High monthly savings rate (>20% of income)
+1000028,Credit-active,Credit card active past 30 days
+1000029,Credit-active,Credit card + personal loan
+1000030,Credit-active,Overdraft usage >50% of limit
+1000031,International,Foreign currency transactions in last 90 days
+1000032,International,Dual-nationality or expat products
+1000033,Rural,Branch in rural postcode
+1000034,Rural,"Low digital engagement, rural location"
+1000035,Urban core,Branch in top-5 city
+1000036,Urban core,"Urban, high-transaction volume"
+1000037,Urban core,"Urban, contactless & tap-pay dominant"
+1000038,New-to-bank,Joined in last 30 days
+1000039,New-to-bank,Joined in last 30-90 days
