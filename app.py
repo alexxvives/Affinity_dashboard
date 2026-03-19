@@ -1392,76 +1392,6 @@ with tab_charts:
     if "tbl" not in dir() or tbl.empty:
         st.warning("No table data — adjust filters in the Data tab.")
     else:
-        st.caption(
-            "**Top segments bar chart** — ranks segments by the selected metric. "
-            "Taller bars = stronger average effect for that communication. "
-            "Use this to decide which segments to prioritise in the next campaign wave. "
-            "Error bars (where shown) are 95% confidence intervals — wider bars mean less certainty."
-        )
-        # ── Bar chart ────────────────────────────────────────────────────────
-        _TOP_N_CHART = 25
-        metric_opts = ([f"{c} Bal%"       for c in ordered_comms]
-                       + [f"{c} Acct%"      for c in ordered_comms]
-                       + [f"{c} Lift Bal"   for c in ordered_comms]
-                       + [f"{c} Lift Acct"  for c in ordered_comms])
-        chosen = st.selectbox(
-            "Sort / highlight metric",
-            metric_opts,
-            key="chart_cm",
-            help="Determines which metric is used to rank segments on the bar chart. "
-                 "Bal% = raw % balance change for treated customers. "
-                 "Lift Bal = treatment minus control (causal effect). "
-                 "Use Lift to isolate what the communication *caused*.",
-        )
-
-        col_map = {
-            **{f"{c} Bal%":      f"{c}_bal"       for c in ordered_comms},
-            **{f"{c} Acct%":     f"{c}_acct"      for c in ordered_comms},
-            **{f"{c} Lift Bal":  f"{c}_lift_bal"  for c in ordered_comms},
-            **{f"{c} Lift Acct": f"{c}_lift_acct" for c in ordered_comms},
-        }
-        _default_sort = f"{ordered_comms[0]}_bal" if ordered_comms else ""
-        sort_col = col_map.get(chosen, _default_sort)
-
-        if sort_col in tbl.columns:
-            top_data = tbl[sort_col].dropna().sort_values(ascending=False).head(_TOP_N_CHART)
-            if "_lift_" in sort_col:
-                ci_col = None
-            else:
-                ci_col = sort_col.replace("_bal", "_bal_ci").replace("_acct", "_acct_ci")
-            has_ci = ci_col is not None and ci_col in tbl.columns
-
-            x_labels = [str(x) for x in top_data.index]
-            _bar_hover = [
-                (SEGMENT_LABELS.get(x, "") + (" — " + SEGMENT_DESCRIPTIONS.get(x, "") if SEGMENT_DESCRIPTIONS.get(x) else ""))
-                for x in x_labels
-            ]
-            fig_bar = px.bar(
-                x=x_labels,
-                y=top_data.values * 100,
-                error_y=(tbl.loc[top_data.index, ci_col].values * 100) if has_ci else None,
-                color=top_data.values * 100,
-                color_continuous_scale="RdYlGn",
-                labels={"x": "Segment", "y": "Mean % change", "color": "%"},
-                title=f"Top {_TOP_N_CHART} segments — {chosen}",
-            )
-            fig_bar.update_traces(
-                customdata=_bar_hover,
-                hovertemplate="<b>%{x}</b>: %{y:.1f}%<br><span style='color:#aaa'>%{customdata}</span><extra></extra>",
-            )
-            fig_bar.update_layout(coloraxis_showscale=False, xaxis_tickangle=-45, height=480)
-            fig_bar.update_xaxes(
-                type="category",
-                tickvals=x_labels,
-                ticktext=[f"{x}  ·  {SEGMENT_LABELS[x]}" if SEGMENT_LABELS.get(x) else x for x in x_labels],
-            )
-            fig_bar.update_yaxes(ticksuffix="%")
-            st.plotly_chart(fig_bar, use_container_width=True)
-        else:
-            st.info("Selected metric not available for current communication selection.")
-
-        st.divider()
-
         # ── Heatmap ─────────────────────────────────────────────────────────
         _hm_metric = st.radio(
             "Heatmap metric",
@@ -1509,7 +1439,7 @@ with tab_charts:
             fig_hm.update_yaxes(
                 type="category", autorange="reversed",
                 tickvals=list(hm.index),
-                ticktext=[f"{s}  ·  {SEGMENT_LABELS[s]}" if SEGMENT_LABELS.get(s) else str(s) for s in hm.index],
+                ticktext=[str(s) for s in hm.index],
             )
             fig_hm.update_xaxes(type="category")
             fig_hm.update_layout(height=max(420, len(hm) * 14 + 100))
@@ -1536,7 +1466,7 @@ with tab_charts:
             "Segments for timeline (top 30)",
             options=jt_pool,
             default=jt_pool[:5],
-            format_func=lambda x: f"{x}  —  {SEGMENT_LABELS.get(x, x)}",
+            format_func=lambda x: x,
             key="jt_segs",
         )
         if jt_segs:
@@ -1583,9 +1513,10 @@ with tab_charts:
             "If two high-performing segments overlap heavily, targeting both wastes budget — "
             "pick the one with stronger lift. Also useful for building exclusion lists."
         )
-        _cooc_sort = next((f"{c}_bal" for c in ordered_comms if f"{c}_bal" in tbl.columns), None)
-        top_segs_cooc = (tbl.sort_values(_cooc_sort, ascending=False).head(30).index.astype(str).tolist()
-                         if _cooc_sort else tbl.index.astype(str).tolist()[:30])
+        _cooc_sort = next((f"{c}_n" for c in ordered_comms if f"{c}_n" in tbl.columns), None)
+        _cooc_pool_size = 100
+        top_segs_cooc = (tbl.sort_values(_cooc_sort, ascending=False).head(_cooc_pool_size).index.astype(str).tolist()
+                         if _cooc_sort else tbl.index.astype(str).tolist()[:_cooc_pool_size])
         if len(top_segs_cooc) < 2:
             st.info("Not enough segments with data to compute co-occurrence. Adjust filters.")
         else:
@@ -1593,7 +1524,7 @@ with tab_charts:
             if _cooc_max <= 2:
                 cooc_n = _cooc_max
             else:
-                _cooc_def = min(20, _cooc_max)
+                _cooc_def = min(40, _cooc_max)
                 if "cooc_n" in st.session_state:
                     st.session_state["cooc_n"] = max(2, min(int(st.session_state["cooc_n"]), _cooc_max))
                 cooc_n = st.slider("Top N segments to include", 2, _cooc_max, _cooc_def, key="cooc_n")
@@ -1651,44 +1582,6 @@ with tab_charts:
 
         st.divider()
 
-        # ── Violin / distribution ────────────────────────────────────────────
-        _vio_metric = st.radio("Violin metric", ["Balance %", "Accounts %"], horizontal=True, key="vio_metric")
-        _vio_col    = "balance_pct_change" if _vio_metric == "Balance %" else "accounts_pct_change"
-        _vio_label  = "Balance % change"   if _vio_metric == "Balance %" else "Accounts % change"
-        st.subheader(f"{_vio_label} distribution by communication")
-        st.caption(
-            "**Violin chart** — shows the full spread of individual % changes, "
-            "not just the average. A wide violin = high variability, meaning the average is driven by "
-            "a few extreme responders. A narrow violin = consistent response across all customers. "
-            "Use this to identify segments where the average is misleading."
-        )
-        pool     = tbl.index.astype(str).tolist()[:30]
-        seg_pick = st.multiselect(
-            "Segments to compare (top 30)",
-            options=pool, default=pool[:4],
-            format_func=lambda x: f"{x}  —  {SEGMENT_LABELS.get(x, x)}",
-            key="chart_vio",
-        )
-        if seg_pick:
-            dv = df[
-                (df["contact_flag"] == 1) & (df["nsegment"].isin(seg_pick))
-                & (df["communication"].isin(ordered_comms))
-            ].dropna(subset=[_vio_col])
-            if not dv.empty:
-                dv = dv.copy()
-                dv["_label"] = dv["nsegment"].astype(str)
-                fig_v = px.violin(
-                    dv, x="communication", y=_vio_col,
-                    color="_label", box=True, points=False,
-                    category_orders={"communication": ordered_comms},
-                    labels={_vio_col: _vio_label, "_label": "Segment"},
-                    title=f"{_vio_label} distribution per communication",
-                )
-                fig_v.update_yaxes(tickformat=".0%")
-                st.plotly_chart(fig_v, use_container_width=True)
-
-        st.divider()
-
         # ── Distribution explorer ────────────────────────────────────────────
         st.subheader("Distribution explorer — KDE density")
         st.caption(
@@ -1701,7 +1594,7 @@ with tab_charts:
         all_segs = sorted(df["nsegment"].unique().tolist())
         with dc1:
             dist_segs = st.multiselect("Select segments", options=all_segs, default=all_segs[:5],
-                                       format_func=lambda x: f"{x}  —  {SEGMENT_LABELS.get(x, x)}", key="dist_segs")
+                                       format_func=lambda x: x, key="dist_segs")
         with dc2:
             dist_comm = st.selectbox("Communication", options=["All selected"] + ordered_comms, key="dist_comm")
         with dc3:
