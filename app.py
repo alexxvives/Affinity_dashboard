@@ -592,9 +592,10 @@ def style_tbl(
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
                     color: #aaa !important; font-weight: normal; cursor: help;
-                    position: sticky; left: 0; z-index: 1; }}
+                    position: sticky; left: 0; z-index: 1;
+                    min-width: 90px; padding: 4px 16px 4px 10px; }}
   th.blank {{ background: #262730 !important;
-              position: sticky; left: 0; z-index: 3; }}
+              position: sticky; left: 0; z-index: 3; min-width: 90px; }}
 </style></head>
 <body><div style="overflow:auto; max-height: 615px;">
 {table_html}
@@ -1022,7 +1023,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         _row1[_i].checkbox(_c, value=True, key=f"cb_{_c}")
     show_lift = _row1[_n_pc].checkbox(
         "Show lift vs control",
-        value=False,
+        value=True,
         key="tbl_show_lift",
         help="Lift = treatment group mean − control group mean in the same segment. "
              "Positive = the communication added value beyond background trends. "
@@ -1085,7 +1086,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                 )
                 import plotly.graph_objects as go
                 _ex = [
-                    {"label": "Segment B — unreliable ⚠️", "lift": 2.0, "ci": 3.5, "colour": "#F8696B"},
+                    {"label": "Segment B — unreliable", "lift": 2.0, "ci": 3.5, "colour": "#F8696B"},
                     {"label": "Segment A — reliable", "lift": 5.0, "ci": 2.0, "colour": "#63BE7B"},
                 ]
                 _fig_ci = go.Figure()
@@ -1766,7 +1767,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             _default_sim = all_segs_sim[:min(10, len(all_segs_sim))]
 
         sim_segs = st.multiselect(
-            "Segments to include in the simulation",
+            "Segments to INCLUDE in the simulation",
             options=all_segs_sim,
             default=st.session_state.get("sim_segs", []),
             # start empty — let the user pick, or use Send to Simulator from the Data tab
@@ -1777,7 +1778,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
         # Exclude multiselect
         _excl_options = [s for s in all_segs_sim if s not in (sim_segs or [])]
         sim_segs_excl = st.multiselect(
-            "Segments to EXCLUDE (override — removes these from the analysis even if included above)",
+            "Segments to EXCLUDE from the simulation",
             options=all_segs_sim,
             default=[s for s in st.session_state.get("sim_segs_excl", []) if s in all_segs_sim],
             format_func=lambda x: x,
@@ -1941,17 +1942,21 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                      "are in that segment × communication cell. Higher N = more reliable lift estimate.",
             )
 
-            # Build columns: lift only, or interleaved lift + N
+            # Build columns: lift, CI, and optionally N — interleaved per comm
+            _ci_suffix = "_lift_bal_ci" if sim_metric == "Balance % lift" else "_lift_acct_ci"
             _intl_cols = []
             for c in ordered_comms:
                 if f"{c}{_lift_suffix}" in tbl.columns:
                     _intl_cols.append(f"{c}{_lift_suffix}")
+                if f"{c}{_ci_suffix}" in tbl.columns:
+                    _intl_cols.append(f"{c}{_ci_suffix}")
                 if _show_sim_n and f"{c}_n" in tbl.columns:
                     _intl_cols.append(f"{c}_n")
             detail = tbl.loc[tbl.index.isin(_sim_segs_eff), [c for c in _intl_cols if c in tbl.columns]].copy()
             detail.index.name = "Segment"
 
             col_rename_sim = {f"{c}{_lift_suffix}": c for c in ordered_comms}
+            col_rename_sim.update({f"{c}{_ci_suffix}": f"{c} CI±" for c in ordered_comms})
             col_rename_sim.update({f"{c}_n": f"{c} N" for c in ordered_comms})
             detail = detail.rename(columns=col_rename_sim)
 
@@ -1965,6 +1970,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                 return f"{pct:.0f}%"
 
             pct_fmt = {c: _pct_fmt_sim for c in ordered_comms if c in detail.columns}
+            pct_fmt.update({f"{c} CI±": _pct_fmt_sim for c in ordered_comms if f"{c} CI±" in detail.columns})
             n_fmt   = {f"{c} N": "{:,.0f}" for c in ordered_comms if f"{c} N" in detail.columns}
             fmt_all = {**pct_fmt, **n_fmt}
 
@@ -1975,6 +1981,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                 return col_series.map(_n_color)
 
             lift_disp_cols = [c for c in ordered_comms if c in detail.columns]
+            ci_disp_cols   = [f"{c} CI±" for c in ordered_comms if f"{c} CI±" in detail.columns]
             n_disp_cols    = [f"{c} N" for c in ordered_comms if f"{c} N" in detail.columns]
             styler_sim = detail.style.format(fmt_all, na_rep="")
             if lift_disp_cols:
