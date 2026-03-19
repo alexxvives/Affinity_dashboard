@@ -1337,7 +1337,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     "* { box-sizing: border-box; }"
                     "body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;"
                     "       font-size: 12px; background: transparent; color: #fafafa; margin: 0; padding: 4px; }"
-                    "table { border-collapse: collapse; width: 100%; }"
+                    "table { border-collapse: collapse; width: 100%; table-layout: fixed; }"
                     "thead th { background: #262730; color: #fafafa; padding: 6px 10px;"
                     "           text-align: left; position: sticky; top: 0; z-index: 2;"
                     "           border-bottom: 2px solid #555; white-space: nowrap; font-size: 11px; }"
@@ -1388,6 +1388,16 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                         if not _t: return m.group(0)
                         return f'{_tp} data-tip="{_t.replace(chr(34), chr(39))}">{_cv}</th>'
                     _h = _re3.sub(r'(<th[^>]*class="[^"]*row_heading[^"]*"[^>]*)>([^<]*)</th>', _tip, _h)
+                    # Inject colgroup so every table in this iframe uses identical column widths
+                    _ncols_inj = 1 + len(_styler.data.columns)  # index col + data cols
+                    _pct_map = {
+                        5: [12, 35, 20, 23, 10],
+                        4: [14, 42, 25, 19],
+                        6: [10, 30, 16, 18, 16, 10],
+                    }
+                    _col_pcts = _pct_map.get(_ncols_inj, [round(100 / _ncols_inj)] * _ncols_inj)
+                    _cg = '<colgroup>' + ''.join(f'<col style="width:{p}%">' for p in _col_pcts) + '</colgroup>'
+                    _h = _re3.sub(r'(<table[^>]*>)', r'\1' + _cg, _h, count=1)
                     _blocks.append(f'<div class="tbl-lbl">{_lbl}</div>{_h}')
                 _body = "".join(_blocks)
                 _js = (
@@ -1403,28 +1413,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     "el.addEventListener('mouseleave',function(){tt.style.display='none';});"
                     "})})()"
                 )
-                _js_cols = (
-                    "window.addEventListener('load',function(){"
-                    "  var tbls=document.querySelectorAll('table');"
-                    "  if(tbls.length<2)return;"
-                    "  var nCols=0;"
-                    "  tbls.forEach(function(t){var r=t.querySelector('thead tr');if(r&&r.cells.length>nCols)nCols=r.cells.length;});"
-                    "  var widths=new Array(nCols).fill(0);"
-                    "  tbls.forEach(function(t){"
-                    "    var r=t.querySelector('thead tr');if(!r)return;"
-                    "    for(var c=0;c<r.cells.length;c++){"
-                    "      var w=r.cells[c].getBoundingClientRect().width;"
-                    "      if(w>widths[c])widths[c]=w;"
-                    "    }"
-                    "  });"
-                    "  tbls.forEach(function(t){"
-                    "    var cg=document.createElement('colgroup');"
-                    "    widths.forEach(function(w){var col=document.createElement('col');col.style.width=w+'px';cg.appendChild(col);});"
-                    "    t.insertBefore(cg,t.firstChild);"
-                    "    t.style.tableLayout='fixed';"
-                    "  });"
-                    "});"
-                )
+                _js_cols = ""
                 return (
                     f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
                     f"<style>{_css}</style></head><body>"
