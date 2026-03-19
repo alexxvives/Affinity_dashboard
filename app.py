@@ -485,7 +485,9 @@ def style_tbl(
         if abs(pct) < 0.1:
             return f"{pct:.2f}%"
         if abs(pct) < 1.0:
-            return f"{pct:.1f}%"
+            s = f"{pct:.1f}%"
+            # guard: rounding can push e.g. 0.96% → "1.0%"; use 2dp instead
+            return f"{pct:.2f}%" if s in ("1.0%", "-1.0%") else s
         return f"{pct:.0f}%"
 
     fmt = {col: _pct_fmt for col in pct_cols if col in disp.columns}
@@ -1170,7 +1172,13 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 
         def _pct_fmt_ra(v):
             if pd.isna(v): return "—"
-            return f"{v * 100:.1f}%"
+            pct = v * 100
+            if abs(pct) < 0.1:
+                return f"{pct:.2f}%"
+            if abs(pct) < 1.0:
+                s = f"{pct:.1f}%"
+                return f"{pct:.2f}%" if s in ("1.0%", "-1.0%") else s
+            return f"{pct:.0f}%"
 
         _ra_shown_segs: List[str] = []  # populated by RA branch below
 
@@ -1981,7 +1989,8 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                 if abs(pct) < 0.1:
                     return f"{pct:.2f}%"
                 if abs(pct) < 1.0:
-                    return f"{pct:.1f}%"
+                    s = f"{pct:.1f}%"
+                    return f"{pct:.2f}%" if s in ("1.0%", "-1.0%") else s
                 return f"{pct:.0f}%"
 
             pct_fmt = {c: _pct_fmt_sim for c in ordered_comms if c in detail.columns}
