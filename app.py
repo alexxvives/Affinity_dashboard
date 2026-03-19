@@ -1239,7 +1239,9 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         if _ra_shown_segs:
             _, _ra_btn_col, _ = st.columns([1, 2, 1])
             if _ra_btn_col.button("📌 Send to Audience Simulator", key="ra_send_sim", use_container_width=True):
-                st.session_state["sim_segs"] = _ra_shown_segs
+                st.session_state["sim_segs"]     = _ra_shown_segs  # OR list → recommended segments
+                st.session_state["sim_segs_and"] = []              # clear AND — no intersection filter
+                st.session_state["sim_segs_excl"] = []             # clear NOT — no exclusions
                 st.success(f"Sent {len(_ra_shown_segs)} segments to the Audience Simulator tab.")
 
         # ── Segment Combo Explorer ────────────────────────────────────────────
