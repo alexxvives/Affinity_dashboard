@@ -1447,10 +1447,11 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             _, _ra_btn_col, _ = st.columns([1, 2, 1])
             if _ra_btn_col.button("Send to Audience Simulator", key="ra_send_sim", use_container_width=True):
                 st.session_state["sim_segs"]          = _ra_shown_segs
-                st.session_state["sim_segs_and"]      = []
+                st.session_state["sim_segs_and"]      = list(_and_idx)
                 st.session_state["sim_segs_excl"]     = _ra_bot_segs
                 st.session_state["sim_run_triggered"] = True
-                st.success(f"Sent {len(_ra_shown_segs)} segment{'s' if len(_ra_shown_segs) != 1 else ''} to the Audience Simulator (+ {len(_ra_bot_segs)} excluded).")
+                _and_note = f", {len(_and_idx)} mandatory AND" if _and_idx else ""
+                st.success(f"Sent {len(_ra_shown_segs)} segment{'s' if len(_ra_shown_segs) != 1 else ''} to the Audience Simulator{_and_note} (+ {len(_ra_bot_segs)} excluded).")
 
         # ── Segment Combo Explorer ────────────────────────────────────────────
         st.divider()
