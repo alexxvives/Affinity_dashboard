@@ -869,43 +869,42 @@ with st.sidebar:
         date_to = st.date_input("To", value=_d_max, min_value=_d_min, max_value=_d_max)
 
     st.divider()
-    st.subheader("Display")
-    # ── min_n: auto-threshold (no slider) ────────────────────────────────────
-    min_n = _MIN_N_DEFAULT
-    st.caption(
-        f"Segments with fewer than **{min_n}** treated customers are hidden "
-        f"(minimum for statistically meaningful lift estimates)."
-    )
-
-    st.divider()
-    with st.expander("Advanced filters", expanded=False):
+    with st.expander("Advanced settings", expanded=False):
         all_mode = False
+        # min_n caption
+        min_n = _MIN_N_DEFAULT
+        st.caption(
+            f"Segments with fewer than **{min_n}** treated customers are hidden "
+            f"(minimum for statistically meaningful lift estimates)."
+        )
+        st.markdown("---")
         bal_clip_pct = 5  # clip below 5th and above 95th percentile (hardcoded)
         st.caption("Outlier clipping: bottom and top 5% of balance changes are removed before aggregation.")
         st.markdown("---")
         _BAL_BASELINE_MIN = 25
         bal_baseline_min = float(_BAL_BASELINE_MIN)
         st.caption(f"Low-balance filter: segments with avg starting balance < €{_BAL_BASELINE_MIN:,} are excluded from rankings.")
-        st.markdown("---")
-        _metric_sel = st.multiselect(
-            "Show columns",
-            ["Balance", "Accounts", "Sample size"],
-            default=["Balance", "Accounts"],
-            key="show_metric_ms",
-            help="Balance = % change in account balance over the 7-day window. "
-                 "Accounts = % change in number of open accounts. "
-                 "Sample size = number of treated customers (N) per segment × communication cell.",
-        )
-        _sel = _metric_sel or ["Balance", "Accounts"]
-        _show_bal  = "Balance"     in _sel
-        _show_acct = "Accounts"    in _sel
-        show_n_cols = "Sample size" in _sel
-        if _show_bal and not _show_acct:
-            _show_metric_val = "balance"
-        elif _show_acct and not _show_bal:
-            _show_metric_val = "accounts"
-        else:
-            _show_metric_val = "both"
+
+    # Show columns (Display section — outside advanced settings)
+    _metric_sel = st.multiselect(
+        "Show columns",
+        ["Balance", "Accounts", "Sample size"],
+        default=["Balance", "Accounts"],
+        key="show_metric_ms",
+        help="Balance = % change in account balance over the 7-day window. "
+             "Accounts = % change in number of open accounts. "
+             "Sample size = number of treated customers (N) per segment × communication cell.",
+    )
+    _sel = _metric_sel or ["Balance", "Accounts"]
+    _show_bal  = "Balance"     in _sel
+    _show_acct = "Accounts"    in _sel
+    show_n_cols = "Sample size" in _sel
+    if _show_bal and not _show_acct:
+        _show_metric_val = "balance"
+    elif _show_acct and not _show_bal:
+        _show_metric_val = "accounts"
+    else:
+        _show_metric_val = "both"
 
     recency_decay = 0.0  # treat all dates equally
 
