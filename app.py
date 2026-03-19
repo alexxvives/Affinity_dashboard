@@ -776,7 +776,7 @@ def _styled_html_table(
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
                     color: #ccc !important; font-weight: normal; cursor: help;
-                    padding: 4px 20px 4px 10px; min-width: 80px; }}
+                    padding: 4px 24px 4px 12px; min-width: 110px; }}
   th.blank {{ background: #262730 !important; }}
 </style></head><body>
 <div style="overflow:auto; max-height:{height - 20}px;">{html}</div>
@@ -1031,7 +1031,7 @@ with tab_explorer:
 
         # ── Full segment table (always visible) ────────────────────────────────
         _exp_styler = (
-            _exp_base.set_index("Segment ID")
+            _exp_base.set_index("Segment ID").rename_axis(None)
             .style
             .apply(lambda s: s.map(_n_color), subset=["Unique Customers"], axis=0)
             .format(na_rep="")
@@ -1345,7 +1345,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     "tbody tr:hover td { outline: 1px solid #666; }"
                     "th.row_heading { background: #1c1e2a !important; font-size: 11px;"
                     "                 color: #ccc !important; font-weight: normal; cursor: help;"
-                    "                 padding: 4px 20px 4px 10px; min-width: 80px; }"
+                    "                 padding: 4px 24px 4px 12px; min-width: 110px; }"
                     "th.blank { background: #262730 !important; }"
                     ".tbl-lbl { font-size: 11px; font-weight: 600; color: #bbb;"
                     "           padding: 6px 2px 2px 2px; margin-top: 2px; }"
@@ -1403,11 +1403,33 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     "el.addEventListener('mouseleave',function(){tt.style.display='none';});"
                     "})})()"
                 )
+                _js_cols = (
+                    "window.addEventListener('load',function(){"
+                    "  var tbls=document.querySelectorAll('table');"
+                    "  if(tbls.length<2)return;"
+                    "  var nCols=0;"
+                    "  tbls.forEach(function(t){var r=t.querySelector('thead tr');if(r&&r.cells.length>nCols)nCols=r.cells.length;});"
+                    "  var widths=new Array(nCols).fill(0);"
+                    "  tbls.forEach(function(t){"
+                    "    var r=t.querySelector('thead tr');if(!r)return;"
+                    "    for(var c=0;c<r.cells.length;c++){"
+                    "      var w=r.cells[c].getBoundingClientRect().width;"
+                    "      if(w>widths[c])widths[c]=w;"
+                    "    }"
+                    "  });"
+                    "  tbls.forEach(function(t){"
+                    "    var cg=document.createElement('colgroup');"
+                    "    widths.forEach(function(w){var col=document.createElement('col');col.style.width=w+'px';cg.appendChild(col);});"
+                    "    t.insertBefore(cg,t.firstChild);"
+                    "    t.style.tableLayout='fixed';"
+                    "  });"
+                    "});"
+                )
                 return (
                     f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
                     f"<style>{_css}</style></head><body>"
                     f"<div style='overflow:auto;max-height:{height-20}px;'>{_body}</div>"
-                    f"<script>{_js}</script></body></html>"
+                    f"<script>{_js}{_js_cols}</script></body></html>"
                 )
 
             _ra_styler2   = _make_single_comm_table(_ra_top)
