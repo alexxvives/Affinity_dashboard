@@ -1055,14 +1055,13 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             show_metric=_show_metric_val,
         )
         _tbl_h = max(300, min(680, 55 + len(tbl) * 32))
-        components.html(html_tbl, height=_tbl_h, scrolling=True)
         if show_lift:
             st.caption(
-                "**Lift CI±** = margin of error (half-width) of the 95% confidence interval. "
-                "Example: Lift = 5.0%, CI± = 2.0% → true lift is likely between 3.0% and 7.0% with 95% confidence. "
                 "**Blank cells** = fewer than 30 customers in that segment × communication (too small to trust)."
             )
-            with st.expander("How to read Lift ± CI", expanded=False):
+        components.html(html_tbl, height=_tbl_h, scrolling=True)
+        if show_lift:
+            with st.expander("How to read Lift \u00b1 CI", expanded=False):
                 st.markdown(
                     "**Segment A** — Lift 5.0% ± 2.0% → range 3.0%–7.0%. "
                     "The range stays **above zero** → the lift is **statistically reliable**.\n\n"
