@@ -5,6 +5,7 @@ import ast
 import io
 import os
 from concurrent.futures import ThreadPoolExecutor
+from itertools import combinations as _combinations
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -387,6 +388,54 @@ def build_table(
     metric_cols = [c for c in tbl.columns if c != "nsegment" and not c.endswith("_n")]
     tbl = tbl.dropna(subset=metric_cols, how="all").set_index("nsegment")
     return tbl
+
+
+@st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
+def _compute_combos(
+    df: pd.DataFrame,
+    comm: str,
+    pool_segs: tuple,   # ordered tuple of segment IDs (hashable)
+    min_n: int,
+    ind_lifts: tuple,   # sorted tuple of (seg, lift) pairs — hashable dict proxy
+) -> list:
+    """Vectorised combo-explorer computation. Cached to avoid rerunning on rerenders."""
+    _ind_lifts_d = dict(ind_lifts)
+    _ce_df_comm = df[df["communication"] == comm]
+    _ce_treated = _ce_df_comm[_ce_df_comm["contact_flag"] == 1]
+    _ce_ctrl    = _ce_df_comm[_ce_df_comm["contact_flag"] == 0]
+
+    # Pre-build segment → set of alpha_keys (one pass per segment, not per pair)
+    _ce_t_idx = {s: set(_ce_treated.loc[_ce_treated["nsegment"] == s, "alpha_key"]) for s in pool_segs}
+    _ce_c_idx = {s: set(_ce_ctrl.loc[_ce_ctrl["nsegment"] == s, "alpha_key"]) for s in pool_segs}
+
+    # Pre-build user→balance dicts — avoids O(N_users) .isin() scan for each pair
+    _ce_user_bal_t = _ce_treated.groupby("alpha_key")["balance_pct_change"].first().to_dict()
+    _ce_user_bal_c = _ce_ctrl.groupby("alpha_key")["balance_pct_change"].first().to_dict()
+
+    _combo_data = []
+    for _s1, _s2 in _combinations(pool_segs, 2):
+        _both_t = _ce_t_idx[_s1] & _ce_t_idx[_s2]
+        if len(_both_t) < min_n:
+            continue
+        _vals_t = np.array([_ce_user_bal_t[u] for u in _both_t if u in _ce_user_bal_t], dtype=float)
+        _avg_t  = float(_vals_t.mean()) if len(_vals_t) > 0 else np.nan
+        _both_c = _ce_c_idx[_s1] & _ce_c_idx[_s2]
+        _vals_c = np.array([_ce_user_bal_c[u] for u in _both_c if u in _ce_user_bal_c], dtype=float)
+        _avg_c  = float(_vals_c.mean()) if len(_vals_c) > 0 else np.nan
+        _ce_combo_lift = (_avg_t - _avg_c) if (pd.notna(_avg_t) and pd.notna(_avg_c)) else np.nan
+        _ce_best_ind   = max(float(_ind_lifts_d.get(_s1, np.nan)), float(_ind_lifts_d.get(_s2, np.nan)))
+        _ce_synergy    = (_ce_combo_lift - _ce_best_ind) if (pd.notna(_ce_combo_lift) and pd.notna(_ce_best_ind)) else np.nan
+        _combo_data.append({
+            "Segments":       f"{_s1} + {_s2}",
+            "_s1": _s1, "_s2": _s2,
+            "N customers":    len(_both_t),
+            "Combo Lift Bal": _ce_combo_lift,
+            "Best Ind. Lift": _ce_best_ind,
+            "Synergy":        _ce_synergy,
+            "_lbl1":          SEGMENT_LABELS.get(_s1, ""),
+            "_lbl2":          SEGMENT_LABELS.get(_s2, ""),
+        })
+    return _combo_data
 
 
 def _rdylgn(val: float, lo: float = -0.10, hi: float = 0.10) -> str:
@@ -1278,52 +1327,29 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             key="combo_comm",
         )
         # Internal constants — not exposed to users
-        _COMBO_POOL_N = 30   # top-N segments to scan pairs from
+        _COMBO_POOL_N = 50   # top-N segments to scan pairs from
         _COMBO_MIN_N  = 15   # minimum shared customers to include a pair
 
         _lift_col_ce = f"{_combo_comm}_lift_bal"
         if _lift_col_ce not in tbl.columns:
             st.info("No lift data available for this communication.")
         else:
-            with st.spinner("Scanning segment pairs for synergy…"):
-                from itertools import combinations as _combinations
-                _ce_pool = (
-                    tbl[_lift_col_ce].dropna()
-                    .sort_values(ascending=False)
-                    .head(_COMBO_POOL_N)
-                    .index.astype(str)
-                    .tolist()
-                )
-                _ce_ind_lifts = tbl.loc[tbl.index.isin(_ce_pool), _lift_col_ce].to_dict()
-                _ce_df_comm = df[df["communication"] == _combo_comm]
-                _ce_treated = _ce_df_comm[_ce_df_comm["contact_flag"] == 1]
-                _ce_ctrl    = _ce_df_comm[_ce_df_comm["contact_flag"] == 0]
-                # Pre-index for speed
-                _ce_t_idx = {s: set(_ce_treated[_ce_treated["nsegment"] == s]["alpha_key"]) for s in _ce_pool}
-                _ce_c_idx = {s: set(_ce_ctrl[_ce_ctrl["nsegment"] == s]["alpha_key"]) for s in _ce_pool}
-                _combo_data = []
-                for _s1, _s2 in _combinations(_ce_pool, 2):
-                    _both_t = _ce_t_idx[_s1] & _ce_t_idx[_s2]
-                    if len(_both_t) < _COMBO_MIN_N:
-                        continue
-                    _sub_t = _ce_treated[_ce_treated["alpha_key"].isin(_both_t)]
-                    _avg_t = _sub_t["balance_pct_change"].mean() if "balance_pct_change" in _sub_t.columns else np.nan
-                    _both_c = _ce_c_idx[_s1] & _ce_c_idx[_s2]
-                    _sub_c = _ce_ctrl[_ce_ctrl["alpha_key"].isin(_both_c)]
-                    _avg_c = _sub_c["balance_pct_change"].mean() if (not _sub_c.empty and "balance_pct_change" in _sub_c.columns) else np.nan
-                    _ce_combo_lift = (_avg_t - _avg_c) if pd.notna(_avg_t) and pd.notna(_avg_c) else np.nan
-                    _ce_best_ind = max(float(_ce_ind_lifts.get(_s1, np.nan)), float(_ce_ind_lifts.get(_s2, np.nan)))
-                    _ce_synergy = (_ce_combo_lift - _ce_best_ind) if pd.notna(_ce_combo_lift) and pd.notna(_ce_best_ind) else np.nan
-                    _combo_data.append({
-                        "Segments":        f"{_s1} + {_s2}",
-                        "_s1": _s1, "_s2": _s2,
-                        "N customers":     len(_both_t),
-                        "Combo Lift Bal":  _ce_combo_lift,
-                        "Best Ind. Lift":  _ce_best_ind,
-                        "Synergy":         _ce_synergy,
-                        "_lbl1": SEGMENT_LABELS.get(_s1, ""),
-                        "_lbl2": SEGMENT_LABELS.get(_s2, ""),
-                    })
+            _ce_pool = (
+                tbl[_lift_col_ce].dropna()
+                .sort_values(ascending=False)
+                .head(_COMBO_POOL_N)
+                .index.astype(str)
+                .tolist()
+            )
+            _ce_ind_lifts = tbl.loc[tbl.index.isin(_ce_pool), _lift_col_ce].to_dict()
+            # Pass ind_lifts as a sorted tuple of pairs so it is hashable for cache keying
+            _combo_data = _compute_combos(
+                df,
+                _combo_comm,
+                tuple(_ce_pool),
+                _COMBO_MIN_N,
+                tuple(sorted(_ce_ind_lifts.items())),
+            )
 
             if _combo_data:
                 _combo_df = pd.DataFrame(_combo_data).sort_values("Synergy", ascending=False)
