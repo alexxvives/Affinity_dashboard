@@ -481,7 +481,11 @@ def style_tbl(
         if pd.isna(v):
             return ""
         pct = v * 100
-        return f"{pct:.1f}%" if abs(pct) < 1.0 else f"{pct:.0f}%"
+        if abs(pct) < 0.1:
+            return f"{pct:.2f}%"
+        if abs(pct) < 1.0:
+            return f"{pct:.1f}%"
+        return f"{pct:.0f}%"
 
     fmt = {col: _pct_fmt for col in pct_cols if col in disp.columns}
     fmt.update({col: "{:,.0f}" for col in n_cols if col in disp.columns})
@@ -1071,10 +1075,17 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                 "**Blank cells** = fewer than 30 customers in that segment × communication (too small to trust)."
             )
             with st.expander("📊 How to read Lift ± CI", expanded=False):
+                st.markdown(
+                    "**Segment A** — Lift 5.0% ± 2.0% → range 3.0%–7.0%. "
+                    "The range stays **above zero** → the lift is **statistically reliable**.\n\n"
+                    "**Segment B** — Lift 2.0% ± 3.5% → range −1.5%–5.5%. "
+                    "The range **crosses zero** → the lift could actually be negative; "
+                    "we can't be confident it's real. Cells with a ⚠️ icon have this issue."
+                )
                 import plotly.graph_objects as go
                 _ex = [
-                    {"label": "Segment A — reliable", "lift": 5.0, "ci": 2.0, "colour": "#63BE7B"},
                     {"label": "Segment B — unreliable ⚠️", "lift": 2.0, "ci": 3.5, "colour": "#F8696B"},
+                    {"label": "Segment A — reliable", "lift": 5.0, "ci": 2.0, "colour": "#63BE7B"},
                 ]
                 _fig_ci = go.Figure()
                 for e in _ex:
@@ -1111,13 +1122,6 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     font=dict(color="#fafafa"),
                 )
                 st.plotly_chart(_fig_ci, use_container_width=True)
-                st.markdown(
-                    "**Segment A** — Lift 5.0% ± 2.0% → range 3.0%–7.0%. "
-                    "The range stays **above zero** → the lift is **statistically reliable**.\n\n"
-                    "**Segment B** — Lift 2.0% ± 3.5% → range −1.5%–5.5%. "
-                    "The range **crosses zero** → the lift could actually be negative; "
-                    "we can't be confident it's real. Cells with a ⚠️ icon have this issue."
-                )
 
         # ── Recommended Audiences ────────────────────────────────────────────
         st.divider()
@@ -1929,7 +1933,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             )
             _show_sim_n = _c_sim_tog.toggle(
                 "Show sample size",
-                value=False,
+                value=True,
                 key="sim_show_n",
                 help="Adds an N column next to each lift value showing how many treated customers "
                      "are in that segment × communication cell. Higher N = more reliable lift estimate.",
@@ -1952,7 +1956,11 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             def _pct_fmt_sim(v):
                 if pd.isna(v): return ""
                 pct = v * 100
-                return f"{pct:.1f}%" if abs(pct) < 1.0 else f"{pct:.0f}%"
+                if abs(pct) < 0.1:
+                    return f"{pct:.2f}%"
+                if abs(pct) < 1.0:
+                    return f"{pct:.1f}%"
+                return f"{pct:.0f}%"
 
             pct_fmt = {c: _pct_fmt_sim for c in ordered_comms if c in detail.columns}
             n_fmt   = {f"{c} N": "{:,.0f}" for c in ordered_comms if f"{c} N" in detail.columns}
@@ -1978,8 +1986,6 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             )
 
             # ── Excel export of selection ─────────────────────────────────────
-            st.divider()
-            st.markdown("#### 📥 Export selection")
             _exp_rows = [
                 {
                     "nsegment":    s,
