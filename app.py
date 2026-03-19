@@ -885,26 +885,11 @@ with st.sidebar:
         bal_baseline_min = float(_BAL_BASELINE_MIN)
         st.caption(f"Low-balance filter: segments with avg starting balance < €{_BAL_BASELINE_MIN:,} are excluded from rankings.")
 
-    # Show columns (Display section — outside advanced settings)
-    _metric_sel = st.multiselect(
-        "Show columns",
-        ["Balance", "Accounts", "Sample size"],
-        default=["Balance", "Accounts"],
-        key="show_metric_ms",
-        help="Balance = % change in account balance over the 7-day window. "
-             "Accounts = % change in number of open accounts. "
-             "Sample size = number of treated customers (N) per segment × communication cell.",
-    )
-    _sel = _metric_sel or ["Balance", "Accounts"]
-    _show_bal  = "Balance"     in _sel
-    _show_acct = "Accounts"    in _sel
-    show_n_cols = "Sample size" in _sel
-    if _show_bal and not _show_acct:
-        _show_metric_val = "balance"
-    elif _show_acct and not _show_bal:
-        _show_metric_val = "accounts"
-    else:
-        _show_metric_val = "both"
+    # Show columns hardcoded: always Balance + Accounts, no Sample size toggle
+    _show_bal       = True
+    _show_acct      = True
+    show_n_cols     = False
+    _show_metric_val = "both"
 
     recency_decay = 0.0  # treat all dates equally
 
