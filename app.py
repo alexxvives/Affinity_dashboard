@@ -1265,7 +1265,12 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                 st.session_state["sim_segs"]      = _ra_shown_segs  # OR list → recommended segments
                 st.session_state["sim_segs_and"]  = list(_ra_and)   # carry AND condition across
                 st.session_state["sim_segs_excl"] = list(_ra_excl)  # carry NOT condition across
-                st.success(f"Sent {len(_ra_shown_segs)} segments to the Audience Simulator tab.")
+                _msg_parts = [f"{len(_ra_shown_segs)} OR segment{'s' if len(_ra_shown_segs) != 1 else ''}"]
+                if _ra_and:
+                    _msg_parts.append(f"{len(_ra_and)} AND")
+                if _ra_excl:
+                    _msg_parts.append(f"{len(_ra_excl)} NOT")
+                st.success(f"Sent {', '.join(_msg_parts)} to the Audience Simulator tab.")
 
         # ── Segment Combo Explorer ────────────────────────────────────────────
         st.divider()
