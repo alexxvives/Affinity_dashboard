@@ -1348,8 +1348,8 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     "                 padding: 4px 20px 4px 10px; min-width: 80px; }"
                     "th.blank { background: #262730 !important; }"
                     ".tbl-lbl { font-size: 11px; font-weight: 600; color: #bbb;"
-                    "           padding: 8px 2px 2px 2px; border-top: 1px solid #444; margin-top: 4px; }"
-                    ".tbl-lbl:first-child { border-top: none; margin-top: 0; padding-top: 2px; }"
+                    "           padding: 6px 2px 2px 2px; margin-top: 2px; }"
+                    ".tbl-lbl:first-child { margin-top: 0; padding-top: 2px; }"
                 )
                 _blocks = []
                 for _item in items:
@@ -1428,8 +1428,13 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 
         # ── Send recommended segments to Simulator ───────────────────────
         if _ra_shown_segs:
+            st.markdown(
+                '<style>div:has(>#_ra_send_anchor)+div[data-testid="element-container"]'
+                '{margin-top:-16px!important}</style><div id="_ra_send_anchor"></div>',
+                unsafe_allow_html=True,
+            )
             _, _ra_btn_col, _ = st.columns([1, 2, 1])
-            if _ra_btn_col.button("📌 Send to Audience Simulator", key="ra_send_sim", use_container_width=True):
+            if _ra_btn_col.button("Send to Audience Simulator", key="ra_send_sim", use_container_width=True):
                 st.session_state["sim_segs"]          = _ra_shown_segs
                 st.session_state["sim_segs_and"]      = []
                 st.session_state["sim_segs_excl"]     = _ra_bot_segs
@@ -2091,9 +2096,14 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                 # Add summary sheet
                 sim_summary.to_excel(_ew, sheet_name="Summary", index=False)
             _exp_buf.seek(0)
+            st.markdown(
+                '<style>div:has(>#_dl_anchor)+div[data-testid="element-container"]'
+                '{margin-top:-16px!important}</style><div id="_dl_anchor"></div>',
+                unsafe_allow_html=True,
+            )
             _, _dl_col, _ = st.columns([2, 2, 2])
             _dl_col.download_button(
-                "⬇️ Download Excel (.xlsx)",
+                "Download Excel (.xlsx)",
                 _exp_buf.read(),
                 file_name="targeting_selection.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
