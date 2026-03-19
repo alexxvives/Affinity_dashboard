@@ -1273,11 +1273,24 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             # AND segments — hard constraints (must be present in the table)
             _and_idx = [s for s in ra_and_segs if s in _sorted_comm.index.astype(str)]
 
+            # CI-aware sort: reliable segments (CI ≤ |lift|) get priority tier 1,
+            # unreliable (CI crosses zero) get tier 2 — within each tier, still ranked by lift
+            _ci_series = _tbl_ra[_ra_ci_col] if _ra_ci_col in _tbl_ra.columns else pd.Series(dtype=float)
+            def _reliable(seg):
+                l = _sorted_comm.get(seg, np.nan)
+                c = _ci_series.get(seg, np.nan) if seg in _ci_series.index else np.nan
+                return int(pd.notna(l) and pd.notna(c) and abs(c) <= abs(l))
+            _sorted_str = _sorted_comm.copy()
+            _sorted_str.index = _sorted_str.index.astype(str)
+            _reliability = pd.Series({s: _reliable(s) for s in _sorted_str.index})
+            _sort_df = pd.DataFrame({'lift': _sorted_str, 'tier': _reliability})
+            _sort_df = _sort_df.sort_values(['tier', 'lift'], ascending=[False, False])
+
             # Greedy top-lift selection until cumulative audience >= ra_min_aud
-            _non_and = _sorted_comm[~_sorted_comm.index.astype(str).isin(_and_idx)]
+            _non_and = _sort_df[~_sort_df.index.isin(_and_idx)]
             _aud_running = float(_seg_n_raw.reindex(_and_idx).fillna(0).sum())
             _selected: List[str] = []
-            for _seg in _non_and.index.astype(str):
+            for _seg in _non_and.index:
                 if _aud_running >= ra_min_aud:
                     break
                 _selected.append(_seg)
@@ -1288,8 +1301,10 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                 [s for s in _ra_top_idx if s in _sorted_comm.index], tolerance=None
             ).dropna()
             # Bottom: lowest-lift among the non-selected remainder
-            _remainder  = _non_and[~_non_and.index.astype(str).isin(_selected)]
-            _ra_bot     = _remainder.sort_values(ascending=True).head(5)
+            # Scale bottom count with top selection: ~half of top, min 3, max 15
+            _bot_n = max(3, min(15, len(_ra_top_idx) // 2))
+            _remainder  = _sort_df[~_sort_df.index.isin(_ra_top_idx)]
+            _ra_bot     = _remainder['lift'].sort_values(ascending=True).head(_bot_n)
 
             _ra_n_vals  = _seg_n_raw.reindex(_ra_top.index.astype(str)).fillna(0)
             _ra_n_vals.index = _ra_top.index
@@ -1821,6 +1836,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             default=st.session_state.get("sim_segs", []),
             format_func=lambda x: x,
             key="sim_segs",
+            max_selections=len(all_segs_sim),
             help="A customer qualifies if they belong to ANY of these segments.",
         )
 
@@ -1831,6 +1847,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             default=[s for s in st.session_state.get("sim_segs_and", []) if s in all_segs_sim],
             format_func=lambda x: x,
             key="sim_segs_and",
+            max_selections=len(all_segs_sim),
             help="When non-empty, only segments that appear in BOTH the OR list and this list are kept. "
                  "Use this to narrow: e.g. OR=[A,B,C] AND=[B,C,D] → effective segments are {B,C}.",
         )
@@ -1842,6 +1859,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             default=[s for s in st.session_state.get("sim_segs_excl", []) if s in all_segs_sim],
             format_func=lambda x: x,
             key="sim_segs_excl",
+            max_selections=len(all_segs_sim),
             help="Any segment listed here is removed from the final set, even if it appears above.",
         )
         # Effective segments: OR ∩ AND (if set) − NOT
