@@ -23,21 +23,21 @@ def generate_dummy_dataset(n_users=5000, n_rows=100000, seed=42):
     np.random.seed(seed)
     random.seed(seed)
 
-    _comm_list = ['day1', 'day5', 'day7', 'day31', 'day61', 'day90', 'day120']
+    _comm_list = ['day1', 'day5', 'day7', 'day31', 'day61DD', 'day61NDD', 'day90', 'day120']
 
     comm_weights = {
         'day1': 0.24, 'day5': 0.06, 'day7': 0.11,
-        'day31': 0.15, 'day61': 0.13, 'day90': 0.20, 'day120': 0.11,
+        'day31': 0.15, 'day61DD': 0.07, 'day61NDD': 0.06, 'day90': 0.20, 'day120': 0.11,
     }
     comm_contact_rate = {
         'day1': 0.80, 'day5': 0.60, 'day7': 0.65,
-        'day31': 0.70, 'day61': 0.72, 'day90': 0.75, 'day120': 0.68,
+        'day31': 0.70, 'day61DD': 0.72, 'day61NDD': 0.68, 'day90': 0.75, 'day120': 0.68,
     }
     # (mean €, std €) balance increase for treated group per communication
     comm_fx = {
-        'day1':  (320.0, 300.0), 'day5':  ( 90.0, 250.0), 'day7':  (150.0, 280.0),
-        'day31': (230.0, 320.0), 'day61': (260.0, 340.0), 'day90': (290.0, 360.0),
-        'day120':(200.0, 300.0),
+        'day1':    (320.0, 300.0), 'day5':  ( 90.0, 250.0), 'day7':  (150.0, 280.0),
+        'day31':   (230.0, 320.0), 'day61DD': (260.0, 340.0), 'day61NDD': (240.0, 330.0),
+        'day90':   (290.0, 360.0), 'day120': (200.0, 300.0),
     }
 
     # ── Segment pool ────────────────────────────────────────────────────────
@@ -80,10 +80,10 @@ def generate_dummy_dataset(n_users=5000, n_rows=100000, seed=42):
 
     user_cohort = {u: int(np.random.randint(0, 4)) for u in users}
     cohort_w = [
-        {'day1': 0.30, 'day5': 0.04, 'day7': 0.08, 'day31': 0.10, 'day61': 0.10, 'day90': 0.28, 'day120': 0.10},
-        {'day1': 0.10, 'day5': 0.10, 'day7': 0.15, 'day31': 0.25, 'day61': 0.25, 'day90': 0.10, 'day120': 0.05},
-        {'day1': 0.14, 'day5': 0.14, 'day7': 0.14, 'day31': 0.15, 'day61': 0.15, 'day90': 0.14, 'day120': 0.14},
-        {'day1': 0.05, 'day5': 0.05, 'day7': 0.05, 'day31': 0.10, 'day61': 0.15, 'day90': 0.30, 'day120': 0.30},
+        {'day1': 0.30, 'day5': 0.04, 'day7': 0.08, 'day31': 0.10, 'day61DD': 0.06, 'day61NDD': 0.04, 'day90': 0.28, 'day120': 0.10},
+        {'day1': 0.10, 'day5': 0.10, 'day7': 0.15, 'day31': 0.25, 'day61DD': 0.14, 'day61NDD': 0.11, 'day90': 0.10, 'day120': 0.05},
+        {'day1': 0.14, 'day5': 0.14, 'day7': 0.14, 'day31': 0.14, 'day61DD': 0.08, 'day61NDD': 0.07, 'day90': 0.14, 'day120': 0.15},
+        {'day1': 0.05, 'day5': 0.05, 'day7': 0.05, 'day31': 0.10, 'day61DD': 0.08, 'day61NDD': 0.07, 'day90': 0.30, 'day120': 0.30},
     ]
 
     user_bal  = {u: max(200.0, float(np.random.normal(3000.0, 1500.0))) for u in users}

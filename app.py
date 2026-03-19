@@ -38,7 +38,7 @@ except FileNotFoundError:
     _SEGMENT_GROUPS: Dict[str, List[str]] = {}
 
 # ── Config ────────────────────────────────────────────────────────────────────
-COMM_ORDER = ["day1", "day5", "day7", "day31", "day61DD", "dayNDD", "day90", "day120"]
+COMM_ORDER = ["day1", "day5", "day7", "day31", "day61DD", "day61NDD", "day90", "day120"]
 REQUIRED_COLS = [
     "communication", "alpha_key", "contact_flag",
     "start_date", "end_date",
@@ -1129,7 +1129,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     "The range stays <b>above zero</b> → the lift is <b>statistically reliable</b>.<br><br>"
                     "<b>Segment B</b> — Lift 2.0% \u00b1 3.5% → range −1.5%–5.5%. "
                     "The range <b>crosses zero</b> → the lift could actually be negative; "
-                    "we can't be confident it's real. Cells with a \u26a0\ufe0f icon have this issue."
+                    "we can't be confident it's real."
                     "</p>",
                     unsafe_allow_html=True,
                 )
@@ -1245,6 +1245,35 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 
         _ra_shown_segs: List[str] = []  # populated by RA branch below
 
+        _ci_suf_all = "_lift_bal_ci" if ra_metric == "Balance lift" else "_lift_acct_ci"
+
+        def _build_interleaved_table(seg_list, label="OR"):
+            """Build a single DataFrame with lift+CI columns interleaved per communication."""
+            cols_ordered = []
+            data = {}
+            for _rc in ordered_comms:
+                _lc = f"{_rc}{ra_suffix}"
+                _cc = f"{_rc}{_ci_suf_all}"
+                if _lc in tbl.columns:
+                    lift_vals = tbl.loc[tbl.index.isin(seg_list), _lc].reindex(seg_list)
+                    data[f"{_rc} Lift"] = lift_vals.values
+                    cols_ordered.append(f"{_rc} Lift")
+                if _cc in tbl.columns:
+                    ci_vals = tbl.loc[tbl.index.isin(seg_list), _cc].reindex(seg_list)
+                    data[f"{_rc} ±CI"] = ci_vals.values
+                    cols_ordered.append(f"{_rc} ±CI")
+            if not data:
+                return None, []
+            _df = pd.DataFrame(data, index=seg_list, columns=cols_ordered)
+            _df.index.name = "Segment"
+            _lift_disp = [c for c in cols_ordered if c.endswith(" Lift")]
+            _styler = (
+                _df.style
+                .format(_pct_fmt_ra, na_rep="—")
+                .apply(lambda s: s.map(_rdylgn), subset=_lift_disp, axis=0)
+            )
+            return _styler, _df
+
         if ra_comm == "All (compare)":
             _ra_frames: Dict[str, pd.Series] = {}
             for _rc in ordered_comms:
@@ -1253,79 +1282,45 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     _ra_frames[_rc] = _tbl_ra[_col].dropna().sort_values(ascending=False).head(int(ra_top_n))
             if _ra_frames:
                 _ra_all_segs = list(dict.fromkeys(s for fr in _ra_frames.values() for s in fr.index))
-                _ra_matrix = pd.DataFrame(
-                    {c: fr.reindex(_ra_all_segs) for c, fr in _ra_frames.items()},
-                    index=_ra_all_segs,
-                )
-                _ra_matrix.index.name = "Segment"
-                _ra_styler = (
-                    _ra_matrix.style
-                    .format(_pct_fmt_ra, na_rep="—")
-                    .apply(lambda s: s.map(_rdylgn), axis=0)
-                )
-                _ra_h = max(300, min(680, 60 + len(_ra_matrix) * 28))
-                st.markdown("**OR — Recommended segments (lift by communication)**")
-                components.html(
-                    _styled_html_table(_ra_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_h),
-                    height=_ra_h, scrolling=True,
-                )
-                # CI matrix
-                _ra_ci_frames: Dict[str, pd.Series] = {}
-                _ci_suf_all = "_lift_bal_ci" if ra_metric == "Balance lift" else "_lift_acct_ci"
-                for _rc in ordered_comms:
-                    _ci_col_all = f"{_rc}{_ci_suf_all}"
-                    if _ci_col_all in _tbl_ra.columns:
-                        _ra_ci_frames[_rc] = _tbl_ra.loc[_tbl_ra.index.isin(_ra_all_segs), _ci_col_all].reindex(_ra_all_segs)
-                if _ra_ci_frames:
-                    _ra_ci_matrix = pd.DataFrame(_ra_ci_frames, index=_ra_all_segs)
-                    _ra_ci_matrix.index.name = "Segment"
-                    st.markdown("**OR — ±CI95 (confidence interval for each lift)**")
-                    _ra_ci_h = max(200, min(500, 60 + len(_ra_ci_matrix) * 28))
-                    components.html(
-                        _styled_html_table(
-                            _ra_ci_matrix.style.format(_pct_fmt_ra, na_rep="—"),
-                            SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_ci_h,
-                        ),
-                        height=_ra_ci_h, scrolling=True,
-                    )
                 _ra_shown_segs = [str(s) for s in _ra_all_segs]
-                # AND / NOT sub-tables
+
+                # OR table — interleaved lift + CI per comm
+                st.markdown("**OR — Recommended segments**")
+                _or_styler, _or_df = _build_interleaved_table(_ra_all_segs)
+                if _or_styler is not None:
+                    _ra_h = max(300, min(680, 60 + len(_or_df) * 28))
+                    components.html(
+                        _styled_html_table(_or_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_h),
+                        height=_ra_h, scrolling=True,
+                    )
+
+                # AND table — only when segments chosen
                 if _ra_and:
-                    st.markdown("**AND — filter segments**")
                     _and_segs = [s for s in _ra_and if s in tbl.index.astype(str)]
-                    _and_lift_cols = [f"{c}{ra_suffix}" for c in ordered_comms if f"{c}{ra_suffix}" in tbl.columns]
-                    _and_ci_cols   = [f"{c}{_ci_suf_all}" for c in ordered_comms if f"{c}{_ci_suf_all}" in tbl.columns]
-                    _all_show_cols = [c for pair in zip(_and_lift_cols, _and_ci_cols) for c in pair] if _and_lift_cols and _and_ci_cols else _and_lift_cols
-                    if _and_segs and _all_show_cols:
-                        _and_df = tbl.loc[tbl.index.isin(_and_segs), [c for c in _all_show_cols if c in tbl.columns]].copy()
-                        _and_df.index.name = "Segment"
-                        _and_h = max(200, min(400, 60 + len(_and_df) * 28))
-                        components.html(
-                            _styled_html_table(
-                                _and_df.style.format(_pct_fmt_ra, na_rep="—").apply(lambda s: s.map(_rdylgn), axis=0),
-                                SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_and_h,
-                            ),
-                            height=_and_h, scrolling=True,
-                        )
+                    if _and_segs:
+                        st.markdown("**AND — intersection filter segments**")
+                        _and_styler, _and_df = _build_interleaved_table(_and_segs)
+                        if _and_styler is not None:
+                            _and_h = max(200, min(400, 60 + len(_and_df) * 28))
+                            components.html(
+                                _styled_html_table(_and_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_and_h),
+                                height=_and_h, scrolling=True,
+                            )
+
+                # NOT table — only when segments chosen
                 if _ra_excl:
-                    st.markdown("**NOT — excluded segments**")
                     _not_segs = [s for s in _ra_excl if s in tbl.index.astype(str)]
                     if _not_segs:
-                        _not_lift_cols = [f"{c}{ra_suffix}" for c in ordered_comms if f"{c}{ra_suffix}" in tbl.columns]
-                        _not_ci_cols   = [f"{c}{_ci_suf_all}" for c in ordered_comms if f"{c}{_ci_suf_all}" in tbl.columns]
-                        _not_show = [c for pair in zip(_not_lift_cols, _not_ci_cols) for c in pair] if _not_lift_cols and _not_ci_cols else _not_lift_cols
-                        _not_df = tbl.loc[tbl.index.isin(_not_segs), [c for c in _not_show if c in tbl.columns]].copy()
-                        _not_df.index.name = "Segment"
-                        _not_h = max(200, min(400, 60 + len(_not_df) * 28))
-                        components.html(
-                            _styled_html_table(
-                                _not_df.style.format(_pct_fmt_ra, na_rep="—").apply(lambda s: s.map(_rdylgn), axis=0),
-                                SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_not_h,
-                            ),
-                            height=_not_h, scrolling=True,
-                        )
+                        st.markdown("**NOT — excluded segments**")
+                        _not_styler, _not_df = _build_interleaved_table(_not_segs)
+                        if _not_styler is not None:
+                            _not_h = max(200, min(400, 60 + len(_not_df) * 28))
+                            components.html(
+                                _styled_html_table(_not_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_not_h),
+                                height=_not_h, scrolling=True,
+                            )
             else:
-                st.info("No lift data available for the current communication selection.") 
+                st.info("No lift data available for the current communication selection.")
         else:
             _ra_col    = f"{ra_comm}{ra_suffix}"
             _ra_ci_col = f"{ra_comm}{'_lift_bal_ci' if ra_metric == 'Balance lift' else '_lift_acct_ci'}"
