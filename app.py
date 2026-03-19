@@ -419,6 +419,7 @@ def style_tbl(
     - Lift column toggle
     """
     disp = tbl.copy()
+    disp.index.name = None  # prevents pandas from rendering a second <tr> in <thead> for the index label
     orig_ids = disp.index.tolist()
 
     # Build column rename map
@@ -1235,7 +1236,8 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 
         # ── Send recommended segments to Simulator ───────────────────────
         if _ra_shown_segs:
-            if st.button("📌 Send recommended segments to Audience Simulator", key="ra_send_sim"):
+            _, _ra_btn_col, _ = st.columns([1, 2, 1])
+            if _ra_btn_col.button("📌 Send to Audience Simulator", key="ra_send_sim", use_container_width=True):
                 st.session_state["sim_segs"] = _ra_shown_segs
                 st.success(f"Sent {len(_ra_shown_segs)} segments to the Audience Simulator tab.")
 
