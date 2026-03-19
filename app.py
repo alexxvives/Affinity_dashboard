@@ -500,6 +500,16 @@ def style_tbl(
             if ci_v in disp.columns:
                 lift_ci_map[v] = ci_v
 
+    # Build per-row warning lookup: set of (row_position, lift_col_name) where CI > |lift|
+    _warn_cells: set = set()
+    if show_lift and lift_ci_map:
+        for lc, cc in lift_ci_map.items():
+            for i in range(len(disp)):
+                lv = disp[lc].iat[i]
+                cv = disp[cc].iat[i]
+                if not pd.isna(lv) and not pd.isna(cv) and abs(cv) > abs(lv):
+                    _warn_cells.add((i, lc))
+
     plain_colour_cols = [v for k, v in rename.items()
                          if (k.endswith("_bal") or k.endswith("_acct")
                              or k in ("agg_bal", "agg_acct"))
@@ -516,6 +526,32 @@ def style_tbl(
         styler = styler.apply(lambda s: s.map(_n_color), subset=n_cols, axis=0)
 
     table_html = styler.to_html()
+
+    # Inject ⚠️ into lift cells where CI crosses zero
+    if _warn_cells:
+        import re as _re_warn
+        _col_names = list(disp.columns)
+        _lift_col_positions = {}
+        for lc in lift_ci_map:
+            if lc in _col_names:
+                _lift_col_positions[lc] = _col_names.index(lc)
+        if _lift_col_positions:
+            _tbody_parts = table_html.split("<tbody>", 1)
+            if len(_tbody_parts) == 2:
+                _rows = _tbody_parts[1].split("</tr>")
+                _row_idx = 0
+                for ri in range(len(_rows)):
+                    if "<tr" not in _rows[ri]:
+                        continue
+                    tds = list(_re_warn.finditer(r'(<td[^>]*>)(.*?)(</td>)', _rows[ri]))
+                    for lc, col_pos in _lift_col_positions.items():
+                        if (_row_idx, lc) in _warn_cells and col_pos < len(tds):
+                            m = tds[col_pos]
+                            old = m.group(0)
+                            new = f'{m.group(1)}{m.group(2)} ⚠️{m.group(3)}'
+                            _rows[ri] = _rows[ri].replace(old, new, 1)
+                    _row_idx += 1
+                table_html = _tbody_parts[0] + "<tbody>" + "</tr>".join(_rows)
 
     # Inject description tooltips on row-index cells
     if seg_labels or seg_desc:
@@ -550,8 +586,10 @@ def style_tbl(
   tbody td {{ padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; color: #111; }}
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
-                    color: #aaa !important; font-weight: normal; cursor: help; }}
-  th.blank {{ background: #262730 !important; }}
+                    color: #aaa !important; font-weight: normal; cursor: help;
+                    position: sticky; left: 0; z-index: 1; }}
+  th.blank {{ background: #262730 !important;
+              position: sticky; left: 0; z-index: 3; }}
 </style></head>
 <body><div style="overflow:auto; max-height: 615px;">
 {table_html}
@@ -787,7 +825,7 @@ st.title("Affinity Explorer")
 st.caption(
     "Analyse how each communication touchpoint affects customer balances and accounts across segments. "
     "Use the **Segment Explorer** to browse segments, **Data** for the full data grid, "
-    "**Targeting Simulator** for audience recommendations, **Charts** for visual deep-dives, "
+    "**Audience Simulator** for audience recommendations, **Charts** for visual deep-dives, "
     "and **Data Quality** for health checks. Adjust filters in the sidebar."
 )
 
@@ -865,7 +903,7 @@ if not ordered_comms:
 tab_explorer, tab_table, tab_simulator, tab_charts, tab_audit = st.tabs([
     "Segment Explorer",
     "Data",
-    "Targeting Simulator",
+    "Audience Simulator",
     "Charts",
     "Data Quality",
 ])
@@ -921,35 +959,33 @@ with tab_explorer:
             .reset_index()
             .sort_values("Customers", ascending=False)
         )
-        _ec1, _ec2 = st.columns(2)
-        with _ec1:
-            _fig_gsz = px.bar(
-                _grp_sz, x="Group", y="Segments",
-                color="Segments", color_continuous_scale="Blues",
-                text="Segments",
-                title="Segments per group",
-            )
-            _fig_gsz.update_xaxes(tickangle=-30)
-            _fig_gsz.update_traces(textposition="outside")
-            _fig_gsz.update_layout(
-                coloraxis_showscale=False, height=360,
-                yaxis_range=[0, int(_grp_sz["Segments"].max()) * 1.20],
-            )
-            st.plotly_chart(_fig_gsz, use_container_width=True)
-        with _ec2:
-            _fig_gus = px.bar(
-                _grp_sz, x="Group", y="Customers",
-                color="Customers", color_continuous_scale="Teal",
-                text=_grp_sz["Customers"].map(lambda v: f"{v:,}"),
-                title="Unique customers per group (active date range)",
-            )
-            _fig_gus.update_xaxes(tickangle=-30)
-            _fig_gus.update_traces(textposition="outside")
-            _fig_gus.update_layout(
-                coloraxis_showscale=False, height=360,
-                yaxis_range=[0, int(_grp_sz["Customers"].max()) * 1.20],
-            )
-            st.plotly_chart(_fig_gus, use_container_width=True)
+        _fig_gsz = px.bar(
+            _grp_sz, x="Group", y="Segments",
+            color="Segments", color_continuous_scale="Blues",
+            text="Segments",
+            title="Segments per group",
+        )
+        _fig_gsz.update_xaxes(tickangle=-30)
+        _fig_gsz.update_traces(textposition="outside")
+        _fig_gsz.update_layout(
+            coloraxis_showscale=False, height=360,
+            yaxis_range=[0, int(_grp_sz["Segments"].max()) * 1.20],
+        )
+        st.plotly_chart(_fig_gsz, use_container_width=True)
+
+        _fig_gus = px.bar(
+            _grp_sz, x="Group", y="Customers",
+            color="Customers", color_continuous_scale="Teal",
+            text=_grp_sz["Customers"].map(lambda v: f"{v:,}"),
+            title="Unique customers per group (active date range)",
+        )
+        _fig_gus.update_xaxes(tickangle=-30)
+        _fig_gus.update_traces(textposition="outside")
+        _fig_gus.update_layout(
+            coloraxis_showscale=False, height=360,
+            yaxis_range=[0, int(_grp_sz["Customers"].max()) * 1.20],
+        )
+        st.plotly_chart(_fig_gus, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════
@@ -1034,28 +1070,54 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                 "Example: Lift = 5.0%, CI± = 2.0% → true lift is likely between 3.0% and 7.0% with 95% confidence. "
                 "**Blank cells** = fewer than 30 customers in that segment × communication (too small to trust)."
             )
-
-        # ── Send top-N to Simulator ───────────────────────────────────────────
-        _, _hs_c1, _hs_c2, _ = st.columns([2, 1, 1, 2], vertical_alignment="bottom")
-        _hs_top_n = _hs_c1.number_input(
-            "Top N",
-            min_value=1, max_value=len(tbl), value=min(10, len(tbl)), step=1,
-            key="tbl_send_n",
-        )
-        _first_lift_tbl = f"{ordered_comms[0]}_lift_bal" if ordered_comms else None
-        if _hs_c2.button("📌 Send to Simulator", use_container_width=True):
-            if _first_lift_tbl and _first_lift_tbl in tbl.columns:
-                _top_segs = (
-                    tbl[_first_lift_tbl].dropna()
-                    .sort_values(ascending=False)
-                    .head(int(_hs_top_n))
-                    .index.astype(str)
-                    .tolist()
+            with st.expander("📊 How to read Lift ± CI", expanded=False):
+                import plotly.graph_objects as go
+                _ex = [
+                    {"label": "Segment A — reliable", "lift": 5.0, "ci": 2.0, "colour": "#63BE7B"},
+                    {"label": "Segment B — unreliable ⚠️", "lift": 2.0, "ci": 3.5, "colour": "#F8696B"},
+                ]
+                _fig_ci = go.Figure()
+                for e in _ex:
+                    lo, hi = e["lift"] - e["ci"], e["lift"] + e["ci"]
+                    _fig_ci.add_trace(go.Scatter(
+                        x=[lo, hi], y=[e["label"], e["label"]],
+                        mode="lines", line=dict(width=8, color=e["colour"]),
+                        showlegend=False, hoverinfo="skip",
+                    ))
+                    _fig_ci.add_trace(go.Scatter(
+                        x=[e["lift"]], y=[e["label"]],
+                        mode="markers+text", marker=dict(size=14, color="#fff", line=dict(width=2, color=e["colour"])),
+                        text=[f"{e['lift']:.1f}%"], textposition="top center",
+                        textfont=dict(size=13, color="#fafafa"),
+                        showlegend=False, hoverinfo="skip",
+                    ))
+                    _fig_ci.add_annotation(
+                        x=lo, y=e["label"], text=f"{lo:.1f}%", showarrow=False,
+                        yshift=-18, font=dict(size=10, color="#bbb"),
+                    )
+                    _fig_ci.add_annotation(
+                        x=hi, y=e["label"], text=f"{hi:.1f}%", showarrow=False,
+                        yshift=-18, font=dict(size=10, color="#bbb"),
+                    )
+                _fig_ci.add_vline(x=0, line_dash="dash", line_color="#888", line_width=1.5,
+                                  annotation_text="zero", annotation_position="top",
+                                  annotation_font_size=10, annotation_font_color="#999")
+                _fig_ci.update_layout(
+                    height=200, margin=dict(l=10, r=10, t=30, b=10),
+                    paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
+                    xaxis=dict(title="Balance Lift %", zeroline=False, gridcolor="#333",
+                               ticksuffix="%", color="#ccc"),
+                    yaxis=dict(color="#ccc"),
+                    font=dict(color="#fafafa"),
                 )
-            else:
-                _top_segs = tbl.index.astype(str).tolist()[:int(_hs_top_n)]
-            st.session_state["sim_segs"] = _top_segs
-            st.success(f"Sent {len(_top_segs)} segments to the Simulator tab → switch to 'Targeting Simulator'.")
+                st.plotly_chart(_fig_ci, use_container_width=True)
+                st.markdown(
+                    "**Segment A** — Lift 5.0% ± 2.0% → range 3.0%–7.0%. "
+                    "The range stays **above zero** → the lift is **statistically reliable**.\n\n"
+                    "**Segment B** — Lift 2.0% ± 3.5% → range −1.5%–5.5%. "
+                    "The range **crosses zero** → the lift could actually be negative; "
+                    "we can't be confident it's real. Cells with a ⚠️ icon have this issue."
+                )
 
         # ── Recommended Audiences ────────────────────────────────────────────
         st.divider()
@@ -1097,6 +1159,8 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             if pd.isna(v): return "—"
             return f"{v * 100:.1f}%"
 
+        _ra_shown_segs: List[str] = []  # populated by RA branch below
+
         if ra_comm == "All (compare)":
             _ra_frames: Dict[str, pd.Series] = {}
             for _rc in ordered_comms:
@@ -1120,6 +1184,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     _styled_html_table(_ra_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_h),
                     height=_ra_h, scrolling=True,
                 )
+                _ra_shown_segs = [str(s) for s in _ra_all_segs]
             else:
                 st.info("No lift data available for the current communication selection.")
         else:
@@ -1160,8 +1225,15 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     f"Top {int(ra_top_n)} segments for **{ra_comm}** by {ra_label}. "
                     "Hover a segment ID for its description."
                 )
+                _ra_shown_segs = [str(s) for s in _ra_top.index]
             else:
                 st.info(f"No {ra_label} data available for **{ra_comm}**.")
+
+        # ── Send recommended segments to Simulator ───────────────────────
+        if _ra_shown_segs:
+            if st.button("📌 Send recommended segments to Audience Simulator", key="ra_send_sim"):
+                st.session_state["sim_segs"] = _ra_shown_segs
+                st.success(f"Sent {len(_ra_shown_segs)} segments to the Audience Simulator tab.")
 
         # ── Segment Combo Explorer ────────────────────────────────────────────
         st.divider()
@@ -1646,10 +1718,10 @@ with tab_charts:
 
 
 # ══════════════════════════════════════════════════════════
-# TARGETING SIMULATOR TAB
+# AUDIENCE SIMULATOR TAB
 # ══════════════════════════════════════════════════════════
 with tab_simulator:
-    st.subheader("🎯 Targeting Simulator")
+    st.subheader("🎯 Audience Performance Simulator")
     st.caption(
         "Select any set of segments below and we'll estimate the **expected balance lift per "
         "communication** if you sent to only those customers. "
@@ -1691,7 +1763,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             "Segments to include in the simulation",
             options=all_segs_sim,
             default=st.session_state.get("sim_segs", []),
-            # start empty — let the user pick, or use Send to Simulator from the Table tab
+            # start empty — let the user pick, or use Send to Simulator from the Data tab
             format_func=lambda x: x,
             key="sim_segs",
         )
