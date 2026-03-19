@@ -878,7 +878,7 @@ with st.sidebar:
     )
 
     st.divider()
-    with st.expander("⚙️ Advanced filters", expanded=False):
+    with st.expander("Advanced filters", expanded=False):
         all_mode = False
         bal_clip_pct = 5  # clip below 5th and above 95th percentile (hardcoded)
         st.caption("Outlier clipping: bottom and top 5% of balance changes are removed before aggregation.")
@@ -886,6 +886,26 @@ with st.sidebar:
         _BAL_BASELINE_MIN = 25
         bal_baseline_min = float(_BAL_BASELINE_MIN)
         st.caption(f"Low-balance filter: segments with avg starting balance < €{_BAL_BASELINE_MIN:,} are excluded from rankings.")
+        st.markdown("---")
+        _metric_sel = st.multiselect(
+            "Show columns",
+            ["Balance", "Accounts", "Sample size"],
+            default=["Balance", "Accounts"],
+            key="show_metric_ms",
+            help="Balance = % change in account balance over the 7-day window. "
+                 "Accounts = % change in number of open accounts. "
+                 "Sample size = number of treated customers (N) per segment × communication cell.",
+        )
+        _sel = _metric_sel or ["Balance", "Accounts"]
+        _show_bal  = "Balance"     in _sel
+        _show_acct = "Accounts"    in _sel
+        show_n_cols = "Sample size" in _sel
+        if _show_bal and not _show_acct:
+            _show_metric_val = "balance"
+        elif _show_acct and not _show_bal:
+            _show_metric_val = "accounts"
+        else:
+            _show_metric_val = "both"
 
     recency_decay = 0.0  # treat all dates equally
 
@@ -998,7 +1018,7 @@ with tab_explorer:
 # TABLE TAB
 # ══════════════════════════════════════════════════════════
 with tab_table:
-    with st.expander("📖 How to read this table", expanded=False):
+    with st.expander("How to read this table", expanded=False):
         st.markdown("""
 > All % changes are measured over the **7-day window** between start_date and end_date. Click any column header to sort. Hover over a segment ID for its description.
 
@@ -1033,26 +1053,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
     if not ordered_comms:
         ordered_comms = _all_present_comms[:]
 
-    # ── Row 2: show columns multiselect (Balance / Accounts / Sample size) ─────
-    _metric_sel = st.multiselect(
-        "Show columns",
-        ["Balance", "Accounts", "Sample size"],
-        default=["Balance", "Accounts"],
-        key="show_metric_ms",
-        help="Balance = % change in account balance over the 7-day window. "
-             "Accounts = % change in number of open accounts. "
-             "Sample size = number of treated customers (N) per segment × communication cell.",
-    )
-    _sel = _metric_sel or ["Balance", "Accounts"]
-    _show_bal  = "Balance"     in _sel
-    _show_acct = "Accounts"    in _sel
-    show_n_cols = "Sample size" in _sel
-    if _show_bal and not _show_acct:
-        _show_metric_val = "balance"
-    elif _show_acct and not _show_bal:
-        _show_metric_val = "accounts"
-    else:
-        _show_metric_val = "both"
+    # ── Row 2 placeholder (Show columns moved to sidebar Advanced filters) ────
 
     with st.spinner("Computing..."):
         tbl = build_table(df, ordered_comms, all_mode, min_n, bal_baseline_min, _ver=2)
@@ -1076,7 +1077,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                 "Example: Lift = 5.0%, CI± = 2.0% → true lift is likely between 3.0% and 7.0% with 95% confidence. "
                 "**Blank cells** = fewer than 30 customers in that segment × communication (too small to trust)."
             )
-            with st.expander("📊 How to read Lift ± CI", expanded=False):
+            with st.expander("How to read Lift ± CI", expanded=False):
                 st.markdown(
                     "**Segment A** — Lift 5.0% ± 2.0% → range 3.0%–7.0%. "
                     "The range stays **above zero** → the lift is **statistically reliable**.\n\n"
@@ -1127,7 +1128,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 
         # ── Recommended Audiences ────────────────────────────────────────────
         st.divider()
-        st.markdown("### 💡 Recommended Audiences")
+        st.markdown("### Recommended Audiences")
         st.caption(
             "Optimal segment groupings for each communication, ranked by lift. "
             "Use these as ready-made targeting lists — no manual segment selection needed."
@@ -1244,7 +1245,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 
         # ── Segment Combo Explorer ────────────────────────────────────────────
         st.divider()
-        st.markdown("### 🔬 Segment Combo Explorer")
+        st.markdown("### Segment Combo Explorer")
         st.caption(
             "Finds segment pairs that **amplify** each other — customers in both segments respond "
             "better than the best individual segment alone. "
@@ -1353,7 +1354,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 # CHARTS TAB
 # ══════════════════════════════════════════════════════════
 with tab_charts:
-    with st.expander("📖 How to read the charts", expanded=False):
+    with st.expander("How to read the charts", expanded=False):
         st.markdown("""
 **Bar chart** — ranks segments by the selected metric. Taller = stronger average effect. Error bars are 95% confidence intervals (wider = less certain). Use this to decide which segments to prioritise in the next campaign.
 
@@ -1728,14 +1729,14 @@ with tab_charts:
 # AUDIENCE SIMULATOR TAB
 # ══════════════════════════════════════════════════════════
 with tab_simulator:
-    st.subheader("🎯 Audience Performance Simulator")
+    st.subheader("Audience Performance Simulator")
     st.caption(
         "Select any set of segments below and we'll estimate the **expected balance lift per "
         "communication** if you sent to only those customers. "
         "Lift is N-weighted across your chosen segments: segments with more customers carry more weight."
     )
 
-    with st.expander("📖 How the numbers are calculated", expanded=False):
+    with st.expander("How the numbers are calculated", expanded=False):
         st.markdown("""
 **Lift (treatment − control)**  
 For each segment × communication cell, *lift* = mean outcome for treated customers minus mean outcome for control customers in the *same segment and communication*.  
@@ -1928,21 +1929,8 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
 
             # ── Per-segment detail table ──────────────────────────────────────
             st.markdown("#### Per-segment breakdown")
-            _c_sim_cap, _c_sim_tog = st.columns([6, 2])
-            _c_sim_cap.caption(
-                "Each cell shows the lift (treatment \u2212 control) for that segment \u00d7 communication. "
-                "Blank = no control data or fewer customers than the minimum N filter. "
-                "Hover a segment ID for its description."
-            )
-            _show_sim_n = _c_sim_tog.toggle(
-                "Show sample size",
-                value=True,
-                key="sim_show_n",
-                help="Adds an N column next to each lift value showing how many treated customers "
-                     "are in that segment × communication cell. Higher N = more reliable lift estimate.",
-            )
 
-            # Build columns: lift, CI, and optionally N — interleaved per comm
+            # Build columns: lift, CI, and N — interleaved per comm
             _ci_suffix = "_lift_bal_ci" if sim_metric == "Balance % lift" else "_lift_acct_ci"
             _intl_cols = []
             for c in ordered_comms:
@@ -1950,7 +1938,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                     _intl_cols.append(f"{c}{_lift_suffix}")
                 if f"{c}{_ci_suffix}" in tbl.columns:
                     _intl_cols.append(f"{c}{_ci_suffix}")
-                if _show_sim_n and f"{c}_n" in tbl.columns:
+                if f"{c}_n" in tbl.columns:
                     _intl_cols.append(f"{c}_n")
             detail = tbl.loc[tbl.index.isin(_sim_segs_eff), [c for c in _intl_cols if c in tbl.columns]].copy()
             detail.index.name = "Segment"
@@ -2049,7 +2037,7 @@ with tab_audit:
 
     st.divider()
 
-    with st.expander("📋 Data Quality", expanded=True):
+    with st.expander("Data Quality", expanded=True):
         nan_bal  = df["balance_pct_change"].isna().mean()
         nan_acct = df["accounts_pct_change"].isna().mean()
         zero_bal = (df["start_balance"].fillna(0) < 1).mean()
@@ -2063,7 +2051,7 @@ with tab_audit:
         date_max_v = df["end_date"].max()
         st.caption(f"Date range: **{date_min_v.date() if pd.notna(date_min_v) else 'N/A'}** → **{date_max_v.date() if pd.notna(date_max_v) else 'N/A'}**")
 
-    with st.expander("⚠️ Methodology Notes", expanded=True):
+    with st.expander("Methodology Notes", expanded=True):
         if bal_baseline_min is not None:
             st.info(f"**Low-balance filter active**: segments with avg starting balance < €{bal_baseline_min:,.0f} excluded from ranking.")
 
@@ -2091,7 +2079,7 @@ with tab_audit:
         avg_segs_u  = overlap.mean()
         st.info(f"**Segment overlap:** {multi_pct:.1%} of customers in >1 segment (avg {avg_segs_u:.1f}/customer).")
 
-    with st.expander("🏆 Top Segment Recommendations", expanded=True):
+    with st.expander("Top Segment Recommendations", expanded=True):
         if "tbl" not in dir() or tbl.empty:
             st.warning("No table data — adjust filters first.")
         else:
