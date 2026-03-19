@@ -1132,16 +1132,39 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             "Optimal segment groupings for each communication, ranked by lift. "
             "Use these as ready-made targeting lists — no manual segment selection needed."
         )
-        _ra_excl_opts = sorted(tbl.index.astype(str).tolist())
-        _ra_excl_def  = [s for s in st.session_state.get("sim_segs_excl", []) if s in _ra_excl_opts]
-        _ra_excl = st.multiselect(
-            "Exclude segments",
-            options=_ra_excl_opts,
-            default=_ra_excl_def,
-            key="ra_excl",
-            help="Segments listed here are excluded from the recommendations below.",
+        _ra_all_opts = sorted(tbl.index.astype(str).tolist())
+
+        # OR — restrict candidate pool (empty = all segments)
+        _ra_or = st.multiselect(
+            "OR \u2014 restrict pool to these segments (empty = all)",
+            options=_ra_all_opts,
+            default=[s for s in st.session_state.get("ra_or", []) if s in _ra_all_opts],
+            key="ra_or",
+            help="When non-empty, only these segments are considered for recommendations. Leave blank to use all.",
         )
-        _tbl_ra = tbl[~tbl.index.astype(str).isin(_ra_excl)] if _ra_excl else tbl
+        # AND \u2014 intersection filter
+        _ra_and = st.multiselect(
+            "AND \u2014 must also be in (intersection)",
+            options=_ra_all_opts,
+            default=[s for s in st.session_state.get("ra_and", []) if s in _ra_all_opts],
+            key="ra_and",
+            help="When non-empty, only segments in BOTH the OR pool and this list are kept.",
+        )
+        # NOT \u2014 always exclude
+        _ra_excl = st.multiselect(
+            "NOT \u2014 exclude segments",
+            options=_ra_all_opts,
+            default=[s for s in st.session_state.get("ra_excl", []) if s in _ra_all_opts],
+            key="ra_excl",
+            help="Segments listed here are removed from recommendations regardless of the other filters.",
+        )
+
+        # Filter the segment pool: (OR if set, else all) \u2229 (AND if set) \u2212 NOT
+        _ra_pool = set(_ra_or) if _ra_or else set(_ra_all_opts)
+        if _ra_and:
+            _ra_pool &= set(_ra_and)
+        _ra_pool -= set(_ra_excl)
+        _tbl_ra = tbl[tbl.index.astype(str).isin(_ra_pool)] if _ra_pool != set(_ra_all_opts) else tbl
 
         _ra_c1, _ra_c2, _ra_c3 = st.columns([2, 2, 1])
         with _ra_c1:
@@ -1239,9 +1262,9 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         if _ra_shown_segs:
             _, _ra_btn_col, _ = st.columns([1, 2, 1])
             if _ra_btn_col.button("📌 Send to Audience Simulator", key="ra_send_sim", use_container_width=True):
-                st.session_state["sim_segs"]     = _ra_shown_segs  # OR list → recommended segments
-                st.session_state["sim_segs_and"] = []              # clear AND — no intersection filter
-                st.session_state["sim_segs_excl"] = []             # clear NOT — no exclusions
+                st.session_state["sim_segs"]      = _ra_shown_segs  # OR list → recommended segments
+                st.session_state["sim_segs_and"]  = list(_ra_and)   # carry AND condition across
+                st.session_state["sim_segs_excl"] = list(_ra_excl)  # carry NOT condition across
                 st.success(f"Sent {len(_ra_shown_segs)} segments to the Audience Simulator tab.")
 
         # ── Segment Combo Explorer ────────────────────────────────────────────
