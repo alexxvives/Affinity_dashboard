@@ -1072,16 +1072,19 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         """)
     # ── Metric toggle ─────────────────────────────────────────────────────────
     _metric_opts = ["Balance & Accounts", "Balance only", "Accounts only"]
-    _show_metric_radio = st.radio(
-        "Show columns",
-        _metric_opts,
-        horizontal=True,
-        key="show_metric_radio",
-        label_visibility="visible",
-    )
+    _mc1, _mc2 = st.columns([3, 1])
+    with _mc1:
+        _show_metric_radio = st.radio(
+            "Show columns",
+            _metric_opts,
+            horizontal=True,
+            key="show_metric_radio",
+            label_visibility="visible",
+        )
+    with _mc2:
+        show_n_cols = st.checkbox("Show sample size (N) columns", value=False, key="show_n_cols")
     _show_metric_map = {"Balance & Accounts": "both", "Balance only": "balance", "Accounts only": "accounts"}
     _show_metric_val = _show_metric_map[_show_metric_radio]
-    show_n_cols = st.checkbox("Show sample size (N) columns", value=False, key="show_n_cols")
 
     # ── Row 1: comm toggle strip + show lift at right ─────────────────────────
     _n_pc = len(_all_present_comms)
@@ -1182,41 +1185,9 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             "Optimal segment groupings for each communication, ranked by lift. "
             "Use these as ready-made targeting lists — no manual segment selection needed."
         )
-        _ra_all_opts = sorted(tbl.index.astype(str).tolist())
+        _tbl_ra = tbl
 
-        # OR — restrict candidate pool (empty = all segments)
-        _ra_or = st.multiselect(
-            "OR \u2014 restrict pool to these segments",
-            options=_ra_all_opts,
-            default=[s for s in st.session_state.get("ra_or", []) if s in _ra_all_opts],
-            key="ra_or",
-            help="When non-empty, only these segments are considered for recommendations. Leave blank to use all.",
-        )
-        # AND \u2014 intersection filter
-        _ra_and = st.multiselect(
-            "AND \u2014 must also be in (intersection)",
-            options=_ra_all_opts,
-            default=[s for s in st.session_state.get("ra_and", []) if s in _ra_all_opts],
-            key="ra_and",
-            help="When non-empty, only segments in BOTH the OR pool and this list are kept.",
-        )
-        # NOT \u2014 always exclude
-        _ra_excl = st.multiselect(
-            "NOT \u2014 exclude segments",
-            options=_ra_all_opts,
-            default=[s for s in st.session_state.get("ra_excl", []) if s in _ra_all_opts],
-            key="ra_excl",
-            help="Segments listed here are removed from recommendations regardless of the other filters.",
-        )
-
-        # Filter the segment pool: (OR if set, else all) \u2229 (AND if set) \u2212 NOT
-        _ra_pool = set(_ra_or) if _ra_or else set(_ra_all_opts)
-        if _ra_and:
-            _ra_pool &= set(_ra_and)
-        _ra_pool -= set(_ra_excl)
-        _tbl_ra = tbl[tbl.index.astype(str).isin(_ra_pool)] if _ra_pool != set(_ra_all_opts) else tbl
-
-        _ra_c1, _ra_c2, _ra_c3 = st.columns([2, 2, 1])
+        _ra_c1, _ra_c2, _ra_c3, _ra_c4 = st.columns([2, 2, 1, 1])
         with _ra_c1:
             ra_metric = st.radio(
                 "Optimise for", ["Balance lift", "Accounts lift"],
@@ -1224,12 +1195,13 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             )
         with _ra_c2:
             ra_comm = st.selectbox(
-                "Communication", ["All (compare)", *ordered_comms], key="ra_comm",
+                "Communication", ordered_comms, key="ra_comm",
             )
         with _ra_c3:
             ra_top_n = st.number_input(
                 "Top N (best lift)", min_value=1, max_value=50, value=10, step=1, key="ra_top_n",
             )
+        with _ra_c4:
             ra_bot_n = st.number_input(
                 "Bottom N (worst lift)", min_value=1, max_value=50, value=5, step=1, key="ra_bot_n",
             )
@@ -1249,198 +1221,61 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 
         _ra_shown_segs: List[str] = []  # populated by RA branch below
 
-        _ci_suf_all = "_lift_bal_ci" if ra_metric == "Balance lift" else "_lift_acct_ci"
+        _ra_col    = f"{ra_comm}{ra_suffix}"
+        _ra_ci_col = f"{ra_comm}{'_lift_bal_ci' if ra_metric == 'Balance lift' else '_lift_acct_ci'}"
+        _ra_n_col  = f"{ra_comm}_n"
+        if _ra_col in _tbl_ra.columns:
+            _sorted_comm = _tbl_ra[_ra_col].dropna().sort_values(ascending=False)
+            _ra_top    = _sorted_comm.head(int(ra_top_n))
+            _ra_bot    = _tbl_ra[_ra_col].dropna().sort_values(ascending=True).head(int(ra_bot_n))
+            _ra_n_vals = _tbl_ra.loc[_ra_top.index, _ra_n_col].fillna(0) if _ra_n_col in _tbl_ra.columns else pd.Series(1.0, index=_ra_top.index)
+            _ra_total_n = _ra_n_vals.sum()
+            _ra_w_lift  = float((_ra_top * _ra_n_vals).sum() / _ra_total_n) if _ra_total_n > 0 else np.nan
+            _ra_n_dict  = _ra_n_vals.to_dict()
+            _ra_users   = df[
+                (df["contact_flag"] == 1)
+                & (df["communication"] == ra_comm)
+                & (df["nsegment"].isin(_ra_top.index))
+            ]["alpha_key"].nunique()
+            _rm1, _rm2 = st.columns(2)
+            _rm1.metric("Recommended audience", f"{_ra_users:,} customers")
+            _rm2.metric(f"Expected {ra_label}", f"{_ra_w_lift:.2%}" if pd.notna(_ra_w_lift) else "—")
+            _ci_label = f"{ra_label} ±CI"
 
-        def _build_interleaved_table(seg_list, label="OR"):
-            """Build a single DataFrame with lift+CI columns interleaved per communication."""
-            cols_ordered = []
-            data = {}
-            for _rc in ordered_comms:
-                _lc = f"{_rc}{ra_suffix}"
-                _cc = f"{_rc}{_ci_suf_all}"
-                if _lc in tbl.columns:
-                    lift_vals = tbl.loc[tbl.index.isin(seg_list), _lc].reindex(seg_list)
-                    data[f"{_rc} Lift"] = lift_vals.values
-                    cols_ordered.append(f"{_rc} Lift")
-                if _cc in tbl.columns:
-                    ci_vals = tbl.loc[tbl.index.isin(seg_list), _cc].reindex(seg_list)
-                    data[f"{_rc} ±CI"] = ci_vals.values
-                    cols_ordered.append(f"{_rc} ±CI")
-            if not data:
-                return None, []
-            _df = pd.DataFrame(data, index=seg_list, columns=cols_ordered)
-            _df.index.name = None  # avoids blank header row in _styled_html_table
-            _lift_disp = [c for c in cols_ordered if c.endswith(" Lift")]
-            _styler = (
-                _df.style
-                .format(_pct_fmt_ra, na_rep="—")
-                .apply(lambda s: s.map(_rdylgn), subset=_lift_disp, axis=0)
+            def _make_single_comm_table(series):
+                _ci_v = _tbl_ra.loc[series.index, _ra_ci_col].values if _ra_ci_col in _tbl_ra.columns else [np.nan] * len(series)
+                _n_v  = [int(_tbl_ra.at[s, _ra_n_col]) if _ra_n_col in _tbl_ra.columns and s in _tbl_ra.index else 0 for s in series.index]
+                _d = pd.DataFrame({
+                    "Label":   [SEGMENT_LABELS.get(str(s), "") for s in series.index],
+                    ra_label:  series.values,
+                    _ci_label: _ci_v,
+                    "N":       _n_v,
+                }, index=series.index)
+                _d.index.name = None
+                return _d.style.format({ra_label: _pct_fmt_ra, _ci_label: _pct_fmt_ra, "N": "{:,.0f}"}, na_rep="")\
+                    .apply(lambda s: s.map(_rdylgn), subset=[ra_label], axis=0)\
+                    .apply(lambda s: s.map(_n_color), subset=["N"], axis=0)
+
+            # Top N
+            st.caption(f"**Top {int(ra_top_n)} segments (highest lift)**")
+            _ra_styler2 = _make_single_comm_table(_ra_top)
+            _ra_h2 = max(300, min(600, 60 + int(ra_top_n) * 30))
+            components.html(
+                _styled_html_table(_ra_styler2, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_h2),
+                height=_ra_h2, scrolling=True,
             )
-            return _styler, _df
+            _ra_shown_segs = [str(s) for s in _ra_top.index]
 
-        if ra_comm == "All (compare)":
-            _ra_frames: Dict[str, pd.Series] = {}
-            _ra_bot_frames: Dict[str, pd.Series] = {}
-            for _rc in ordered_comms:
-                _col = f"{_rc}{ra_suffix}"
-                if _col in _tbl_ra.columns:
-                    _sorted = _tbl_ra[_col].dropna().sort_values(ascending=False)
-                    _ra_frames[_rc]     = _sorted.head(int(ra_top_n))
-                    _ra_bot_frames[_rc] = _sorted.tail(int(ra_bot_n))
-            if _ra_frames:
-                _ra_all_segs     = list(dict.fromkeys(s for fr in _ra_frames.values()     for s in fr.index))
-                _ra_bot_all_segs = list(dict.fromkeys(s for fr in _ra_bot_frames.values() for s in fr.index))
-                _ra_shown_segs = [str(s) for s in _ra_all_segs]
-
-                # OR table — interleaved lift + CI per comm (top N)
-                st.markdown("**OR — Top segments (highest lift)**")
-                _or_styler, _or_df = _build_interleaved_table(_ra_all_segs)
-                if _or_styler is not None:
-                    _ra_h = max(300, min(680, 60 + len(_or_df) * 28))
-                    components.html(
-                        _styled_html_table(_or_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_h),
-                        height=_ra_h, scrolling=True,
-                    )
-
-                # NOT table — bottom N (worst lift)
-                if _ra_bot_all_segs:
-                    st.markdown("**NOT — Bottom segments (lowest lift)**")
-                    _bot_styler, _bot_df = _build_interleaved_table(_ra_bot_all_segs)
-                    if _bot_styler is not None:
-                        _bot_h = max(200, min(500, 60 + len(_bot_df) * 28))
-                        components.html(
-                            _styled_html_table(_bot_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_bot_h),
-                            height=_bot_h, scrolling=True,
-                        )
-
-                # Auto-fill button
-                _, _af_col, _ = st.columns([1, 2, 1])
-                if _af_col.button("📥 Auto-fill OR / NOT from results", key="ra_autofill", use_container_width=True,
-                                  help="Fills OR with the top-N segments and NOT with the bottom-N segments above."):
-                    st.session_state["ra_or"]   = _ra_all_segs
-                    st.session_state["ra_excl"] = _ra_bot_all_segs
-                    st.rerun()
-
-                # AND table — only when segments chosen
-                if _ra_and:
-                    _and_segs = [s for s in _ra_and if s in tbl.index.astype(str)]
-                    if _and_segs:
-                        st.markdown("**AND — intersection filter segments**")
-                        _and_styler, _and_df = _build_interleaved_table(_and_segs)
-                        if _and_styler is not None:
-                            _and_h = max(200, min(400, 60 + len(_and_df) * 28))
-                            components.html(
-                                _styled_html_table(_and_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_and_h),
-                                height=_and_h, scrolling=True,
-                            )
-
-                # NOT table — only when segments chosen
-                if _ra_excl:
-                    _not_segs = [s for s in _ra_excl if s in tbl.index.astype(str)]
-                    if _not_segs:
-                        st.markdown("**NOT — excluded segments**")
-                        _not_styler, _not_df = _build_interleaved_table(_not_segs)
-                        if _not_styler is not None:
-                            _not_h = max(200, min(400, 60 + len(_not_df) * 28))
-                            components.html(
-                                _styled_html_table(_not_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_not_h),
-                                height=_not_h, scrolling=True,
-                            )
-            else:
-                st.info("No lift data available for the current communication selection.")
+            # Bottom N
+            st.caption(f"**Bottom {int(ra_bot_n)} segments (lowest lift)**")
+            _ra_bot_styler = _make_single_comm_table(_ra_bot)
+            _ra_bot_h = max(200, min(500, 60 + int(ra_bot_n) * 30))
+            components.html(
+                _styled_html_table(_ra_bot_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_bot_h),
+                height=_ra_bot_h, scrolling=True,
+            )
         else:
-            _ra_col    = f"{ra_comm}{ra_suffix}"
-            _ra_ci_col = f"{ra_comm}{'_lift_bal_ci' if ra_metric == 'Balance lift' else '_lift_acct_ci'}"
-            _ra_n_col  = f"{ra_comm}_n"
-            if _ra_col in _tbl_ra.columns:
-                _sorted_comm = _tbl_ra[_ra_col].dropna().sort_values(ascending=False)
-                _ra_top    = _sorted_comm.head(int(ra_top_n))
-                _ra_bot    = _sorted_comm.tail(int(ra_bot_n))
-                _ra_n_vals = _tbl_ra.loc[_ra_top.index, _ra_n_col].fillna(0) if _ra_n_col in _tbl_ra.columns else pd.Series(1.0, index=_ra_top.index)
-                _ra_total_n = _ra_n_vals.sum()
-                _ra_w_lift  = float((_ra_top * _ra_n_vals).sum() / _ra_total_n) if _ra_total_n > 0 else np.nan
-                _ra_n_dict  = _ra_n_vals.to_dict()
-                _ra_users   = df[
-                    (df["contact_flag"] == 1)
-                    & (df["communication"] == ra_comm)
-                    & (df["nsegment"].isin(_ra_top.index))
-                ]["alpha_key"].nunique()
-                _rm1, _rm2 = st.columns(2)
-                _rm1.metric("Recommended audience", f"{_ra_users:,} customers")
-                _rm2.metric(f"Expected {ra_label}", f"{_ra_w_lift:.2%}" if pd.notna(_ra_w_lift) else "—")
-                _ci_label = f"{ra_label} ±CI"
-
-                def _make_single_comm_table(series):
-                    _ci_v = _tbl_ra.loc[series.index, _ra_ci_col].values if _ra_ci_col in _tbl_ra.columns else [np.nan] * len(series)
-                    _n_v  = [int(_tbl_ra.at[s, _ra_n_col]) if _ra_n_col in _tbl_ra.columns and s in _tbl_ra.index else 0 for s in series.index]
-                    _d = pd.DataFrame({
-                        "Label":   [SEGMENT_LABELS.get(str(s), "") for s in series.index],
-                        ra_label:  series.values,
-                        _ci_label: _ci_v,
-                        "N":       _n_v,
-                    }, index=series.index)
-                    _d.index.name = None
-                    return _d.style.format({ra_label: _pct_fmt_ra, _ci_label: _pct_fmt_ra, "N": "{:,.0f}"}, na_rep="")\
-                        .apply(lambda s: s.map(_rdylgn), subset=[ra_label], axis=0)\
-                        .apply(lambda s: s.map(_n_color), subset=["N"], axis=0)
-
-                # OR — top N
-                st.markdown("**OR — Top segments (highest lift)**")
-                _ra_styler2 = _make_single_comm_table(_ra_top)
-                _ra_h2 = max(300, min(600, 60 + int(ra_top_n) * 30))
-                components.html(
-                    _styled_html_table(_ra_styler2, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_h2),
-                    height=_ra_h2, scrolling=True,
-                )
-                st.caption(f"Top {int(ra_top_n)} segments for **{ra_comm}** · Hover a segment ID for its description.")
-                _ra_shown_segs = [str(s) for s in _ra_top.index]
-
-                # NOT — bottom N (worst lift)
-                st.markdown("**NOT — Bottom segments (lowest lift)**")
-                _ra_bot_styler = _make_single_comm_table(_ra_bot)
-                _ra_bot_h = max(200, min(500, 60 + int(ra_bot_n) * 30))
-                components.html(
-                    _styled_html_table(_ra_bot_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_bot_h),
-                    height=_ra_bot_h, scrolling=True,
-                )
-                _ra_bot_segs = [str(s) for s in _ra_bot.index]
-
-                # Auto-fill button
-                _, _af_col2, _ = st.columns([1, 2, 1])
-                if _af_col2.button("📥 Auto-fill OR / NOT from results", key="ra_autofill2", use_container_width=True,
-                                   help="Fills OR with the top-N segments and NOT with the bottom-N segments above."):
-                    st.session_state["ra_or"]   = _ra_shown_segs
-                    st.session_state["ra_excl"] = _ra_bot_segs
-                    st.rerun()
-
-                # AND — segments in the AND filter
-                if _ra_and:
-                    _and_segs_s = [s for s in _ra_and if s in tbl.index.astype(str)]
-                    if _and_segs_s:
-                        st.markdown("**AND — intersection filter segments**")
-                        _and_styler_s = _make_single_comm_table(
-                            _tbl_ra.loc[_tbl_ra.index.isin(_and_segs_s), _ra_col].reindex(_and_segs_s)
-                        )
-                        _and_h = max(200, min(400, 60 + len(_and_segs_s) * 30))
-                        components.html(
-                            _styled_html_table(_and_styler_s, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_and_h),
-                            height=_and_h, scrolling=True,
-                        )
-                # NOT — excluded segments (manual)
-                if _ra_excl:
-                    _not_segs_s = [s for s in _ra_excl if s in tbl.index.astype(str)]
-                    if _not_segs_s:
-                        st.markdown("**NOT — excluded segments**")
-                        _not_styler_s = _make_single_comm_table(
-                            _tbl_ra.loc[_tbl_ra.index.isin(_not_segs_s), _ra_col].reindex(_not_segs_s)
-                        )
-                        _not_h = max(200, min(400, 60 + len(_not_segs_s) * 30))
-                        components.html(
-                            _styled_html_table(_not_styler_s, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_not_h),
-                            height=_not_h, scrolling=True,
-                        )
-            else:
-                st.info(f"No {ra_label} data available for **{ra_comm}**.")
+            st.info(f"No {ra_label} data available for **{ra_comm}**.")
 
         # ── Send recommended segments to Simulator ───────────────────────
         if _ra_shown_segs:
