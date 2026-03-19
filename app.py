@@ -713,10 +713,41 @@ def _styled_html_table(
     seg_labels: Optional[Dict[str, str]] = None,
     seg_desc: Optional[Dict[str, str]] = None,
     height: int = 400,
+    warn_ci_pairs: Optional[List] = None,
 ) -> str:
     """Convert a Pandas Styler to a themed HTML doc with segment-ID hover tooltips."""
     import re as _re2
     html = styler.to_html()
+    # Inject ⚠️ on lift cells where CI > |lift| (statistically unreliable)
+    if warn_ci_pairs:
+        _df_w = styler.data
+        _warn_cells_w: set = set()
+        for _lc_w, _cc_w in warn_ci_pairs:
+            if _lc_w in _df_w.columns and _cc_w in _df_w.columns:
+                for _i_w in range(len(_df_w)):
+                    _lv_w = _df_w[_lc_w].iat[_i_w]
+                    _cv_w = _df_w[_cc_w].iat[_i_w]
+                    if pd.notna(_lv_w) and pd.notna(_cv_w) and abs(_cv_w) > abs(_lv_w):
+                        _warn_cells_w.add((_i_w, _lc_w))
+        if _warn_cells_w:
+            _col_names_w = list(_df_w.columns)
+            _lift_pos_w = {_lc_w: _col_names_w.index(_lc_w) for _lc_w, _ in warn_ci_pairs if _lc_w in _col_names_w}
+            _tbody_split_w = html.split("<tbody>", 1)
+            if len(_tbody_split_w) == 2:
+                _rows_w = _tbody_split_w[1].split("</tr>")
+                _ri_w = 0
+                for _rr_w in range(len(_rows_w)):
+                    if "<tr" not in _rows_w[_rr_w]:
+                        continue
+                    _tds_w = list(_re2.finditer(r'(<td[^>]*>)(.*?)(</td>)', _rows_w[_rr_w]))
+                    for _lc_w2, _cp_w in _lift_pos_w.items():
+                        if (_ri_w, _lc_w2) in _warn_cells_w and _cp_w < len(_tds_w):
+                            _mm_w = _tds_w[_cp_w]
+                            _rows_w[_rr_w] = _rows_w[_rr_w].replace(
+                                _mm_w.group(0),
+                                f'{_mm_w.group(1)}{_mm_w.group(2)} ⚠️{_mm_w.group(3)}', 1)
+                    _ri_w += 1
+                html = _tbody_split_w[0] + "<tbody>" + "</tr>".join(_rows_w)
     if seg_labels or seg_desc:
         def _tip(m):
             tag_pre  = m.group(1)
@@ -744,7 +775,8 @@ def _styled_html_table(
   tbody td {{ padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; color: #111; }}
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
-                    color: #ccc !important; font-weight: normal; cursor: help; }}
+                    color: #ccc !important; font-weight: normal; cursor: help;
+                    padding: 4px 20px 4px 10px; min-width: 80px; }}
   th.blank {{ background: #262730 !important; }}
 </style></head><body>
 <div style="overflow:auto; max-height:{height - 20}px;">{html}</div>
@@ -1297,15 +1329,43 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     "tbody td { padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; color: #111; }"
                     "tbody tr:hover td { outline: 1px solid #666; }"
                     "th.row_heading { background: #1c1e2a !important; font-size: 11px;"
-                    "                 color: #ccc !important; font-weight: normal; cursor: help; }"
+                    "                 color: #ccc !important; font-weight: normal; cursor: help;"
+                    "                 padding: 4px 20px 4px 10px; min-width: 80px; }"
                     "th.blank { background: #262730 !important; }"
                     ".tbl-lbl { font-size: 11px; font-weight: 600; color: #bbb;"
                     "           padding: 8px 2px 2px 2px; border-top: 1px solid #444; margin-top: 4px; }"
                     ".tbl-lbl:first-child { border-top: none; margin-top: 0; padding-top: 2px; }"
                 )
                 _blocks = []
-                for _lbl, _styler in items:
+                for _item in items:
+                    _lbl = _item[0]; _styler = _item[1]
+                    _warn_p = _item[2] if len(_item) > 2 else None
                     _h = _styler.to_html()
+                    if _warn_p:
+                        _df3 = _styler.data
+                        _wc3: set = set()
+                        for _lc3, _cc3 in _warn_p:
+                            if _lc3 in _df3.columns and _cc3 in _df3.columns:
+                                for _i3 in range(len(_df3)):
+                                    _lv3 = _df3[_lc3].iat[_i3]; _cv3 = _df3[_cc3].iat[_i3]
+                                    if pd.notna(_lv3) and pd.notna(_cv3) and abs(_cv3) > abs(_lv3):
+                                        _wc3.add((_i3, _lc3))
+                        if _wc3:
+                            _cn3 = list(_df3.columns)
+                            _lp3 = {_lc3: _cn3.index(_lc3) for _lc3, _ in _warn_p if _lc3 in _cn3}
+                            _ts3 = _h.split("<tbody>", 1)
+                            if len(_ts3) == 2:
+                                _rs3 = _ts3[1].split("</tr>")
+                                _ri3 = 0
+                                for _rr3 in range(len(_rs3)):
+                                    if "<tr" not in _rs3[_rr3]: continue
+                                    _td3 = list(_re3.finditer(r'(<td[^>]*>)(.*?)(</td>)', _rs3[_rr3]))
+                                    for _lc3b, _cp3 in _lp3.items():
+                                        if (_ri3, _lc3b) in _wc3 and _cp3 < len(_td3):
+                                            _m3 = _td3[_cp3]
+                                            _rs3[_rr3] = _rs3[_rr3].replace(_m3.group(0), f'{_m3.group(1)}{_m3.group(2)} ⚠️{_m3.group(3)}', 1)
+                                    _ri3 += 1
+                                _h = _ts3[0] + "<tbody>" + "</tr>".join(_rs3)
                     def _tip(m):
                         _tp = m.group(1); _cv = m.group(2); _id = _cv.strip()
                         _l = (SEGMENT_LABELS or {}).get(_id, ""); _d2 = (SEGMENT_DESCRIPTIONS or {}).get(_id, "")
@@ -1343,8 +1403,8 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             _combined_h = max(300, min(900, 80 + (len(_ra_top) + len(_ra_bot)) * 30))
             components.html(
                 _two_tables_html([
-                    (f"Top {len(_ra_top)} segments (highest lift)", _ra_styler2),
-                    (f"Bottom {len(_ra_bot)} segments (lowest lift)", _ra_bot_styler),
+                    (f"Top {len(_ra_top)} segments (highest lift)", _ra_styler2, [(ra_label, _ci_label)]),
+                    (f"Bottom {len(_ra_bot)} segments (lowest lift)", _ra_bot_styler, [(ra_label, _ci_label)]),
                 ], _combined_h),
                 height=_combined_h, scrolling=True,
             )
@@ -1883,7 +1943,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                 label    = row["Communication"]
                 n_val    = int(row["Total N"]) if pd.notna(row["Total N"]) else 0
                 u_val    = int(row["Comm Users"]) if pd.notna(row.get("Comm Users")) else 0
-                delta_str = f"{n_val:,} segment-rows"
+                delta_str = f"{n_val:,} segments"
                 _kpi_help = (
                     f"**Total N = {n_val:,}** — sum of per-segment sample sizes. "
                     f"A customer in {len(_sim_segs_eff)} segments counts {len(_sim_segs_eff)}×. "
@@ -1980,8 +2040,11 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             if n_disp_cols:
                 styler_sim = styler_sim.apply(_n_color_sim, subset=n_disp_cols, axis=0)
             _sim_h = max(300, min(600, 60 + len(detail) * 30))
+            _warn_ci_sim = [(c, f"{c} CI±") for c in ordered_comms
+                            if c in detail.columns and f"{c} CI±" in detail.columns]
             components.html(
-                _styled_html_table(styler_sim, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_sim_h),
+                _styled_html_table(styler_sim, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS,
+                                   height=_sim_h, warn_ci_pairs=_warn_ci_sim),
                 height=_sim_h, scrolling=True,
             )
 
@@ -2010,11 +2073,13 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                 # Add summary sheet
                 sim_summary.to_excel(_ew, sheet_name="Summary", index=False)
             _exp_buf.seek(0)
-            st.download_button(
-                "Download Excel (.xlsx)",
+            _, _dl_col, _ = st.columns([2, 2, 2])
+            _dl_col.download_button(
+                "⬇️ Download Excel (.xlsx)",
                 _exp_buf.read(),
                 file_name="targeting_selection.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
                 help="Exports two sheets: 'Selection' (one row per segment with INCLUDED/EXCLUDED status) and 'Summary' (lift + projection per communication).",
             )
         elif st.session_state.get("sim_run_triggered") and not _sim_segs_eff:
