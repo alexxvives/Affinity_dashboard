@@ -1072,27 +1072,24 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         """)
     # ── Metric toggle ─────────────────────────────────────────────────────────
     _metric_opts = ["Balance & Accounts", "Balance only", "Accounts only"]
-    _mc1, _mc2 = st.columns([3, 1])
-    with _mc1:
-        _show_metric_radio = st.radio(
-            "Show columns",
-            _metric_opts,
-            horizontal=True,
-            key="show_metric_radio",
-            label_visibility="visible",
-        )
-    with _mc2:
-        show_n_cols = st.checkbox("Show sample size (N) columns", value=False, key="show_n_cols")
+    _show_metric_radio = st.radio(
+        "Show columns",
+        _metric_opts,
+        horizontal=True,
+        key="show_metric_radio",
+        label_visibility="visible",
+    )
     _show_metric_map = {"Balance & Accounts": "both", "Balance only": "balance", "Accounts only": "accounts"}
     _show_metric_val = _show_metric_map[_show_metric_radio]
 
-    # ── Row 1: comm toggle strip + show lift at right ─────────────────────────
+    # ── Row 1: comm toggle strip + Show N + Show lift ─────────────────────────
     _n_pc = len(_all_present_comms)
-    _row1 = st.columns(_n_pc + 1)
+    _row1 = st.columns(_n_pc + 2)
     for _i, _c in enumerate(_all_present_comms):
         _row1[_i].checkbox(_c, value=True, key=f"cb_{_c}")
-    show_lift = _row1[_n_pc].checkbox(
-        "Show lift vs control",
+    show_n_cols = _row1[_n_pc].checkbox("Show N", value=False, key="show_n_cols")
+    show_lift = _row1[_n_pc + 1].checkbox(
+        "Show lift",
         value=True,
         key="tbl_show_lift",
         help="Lift = treatment group mean − control group mean in the same segment. "
@@ -1187,7 +1184,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         )
         _tbl_ra = tbl
 
-        _ra_c1, _ra_c2, _ra_c3, _ra_c4 = st.columns([2, 2, 1, 1])
+        _ra_c1, _ra_c2, _ra_c3, _ra_c4 = st.columns([2, 2, 2, 1])
         with _ra_c1:
             ra_metric = st.radio(
                 "Optimise for", ["Balance lift", "Accounts lift"],
@@ -1198,12 +1195,18 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                 "Communication", ordered_comms, key="ra_comm",
             )
         with _ra_c3:
-            ra_top_n = st.number_input(
-                "Top N (best lift)", min_value=1, max_value=50, value=10, step=1, key="ra_top_n",
+            _ra_all_opts = sorted(tbl.index.astype(str).tolist())
+            ra_and_segs = st.multiselect(
+                "AND — mandatory segments",
+                options=_ra_all_opts,
+                default=[s for s in st.session_state.get("ra_and_segs", []) if s in _ra_all_opts],
+                key="ra_and_segs",
+                help="These segments are always included in the recommended audience regardless of lift.",
             )
         with _ra_c4:
-            ra_bot_n = st.number_input(
-                "Bottom N (worst lift)", min_value=1, max_value=50, value=5, step=1, key="ra_bot_n",
+            ra_min_aud = st.number_input(
+                "Min audience", min_value=0, value=5000, step=500, key="ra_min_aud",
+                help="Add top-lift segments until the total reached audience is at least this size.",
             )
 
         ra_suffix = "_lift_bal" if ra_metric == "Balance lift" else "_lift_acct"
@@ -1219,24 +1222,48 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                 return f"{pct:.2f}%" if s in ("1.0%", "-1.0%") else s
             return f"{pct:.0f}%"
 
-        _ra_shown_segs: List[str] = []  # populated by RA branch below
+        _ra_shown_segs: List[str] = []  # top / recommended segments
+        _ra_bot_segs:   List[str] = []  # bottom / avoid segments
 
         _ra_col    = f"{ra_comm}{ra_suffix}"
         _ra_ci_col = f"{ra_comm}{'_lift_bal_ci' if ra_metric == 'Balance lift' else '_lift_acct_ci'}"
         _ra_n_col  = f"{ra_comm}_n"
         if _ra_col in _tbl_ra.columns:
             _sorted_comm = _tbl_ra[_ra_col].dropna().sort_values(ascending=False)
-            _ra_top    = _sorted_comm.head(int(ra_top_n))
-            _ra_bot    = _tbl_ra[_ra_col].dropna().sort_values(ascending=True).head(int(ra_bot_n))
-            _ra_n_vals = _tbl_ra.loc[_ra_top.index, _ra_n_col].fillna(0) if _ra_n_col in _tbl_ra.columns else pd.Series(1.0, index=_ra_top.index)
+
+            # Per-segment unique-customer counts for this communication
+            _seg_n_raw = (
+                df[(df["contact_flag"] == 1) & (df["communication"] == ra_comm)]
+                .groupby("nsegment")["alpha_key"].nunique()
+            )
+            _seg_n_raw.index = _seg_n_raw.index.astype(str)
+
+            # AND segments — hard constraints (must be present in the table)
+            _and_idx = [s for s in ra_and_segs if s in _sorted_comm.index.astype(str)]
+
+            # Greedy top-lift selection until cumulative audience >= ra_min_aud
+            _non_and = _sorted_comm[~_sorted_comm.index.astype(str).isin(_and_idx)]
+            _aud_running = float(_seg_n_raw.reindex(_and_idx).fillna(0).sum())
+            _selected: List[str] = []
+            for _seg in _non_and.index.astype(str):
+                if _aud_running >= ra_min_aud:
+                    break
+                _selected.append(_seg)
+                _aud_running += float(_seg_n_raw.get(_seg, 0))
+
+            _ra_top_idx = list(dict.fromkeys(_and_idx + _selected))
+            _ra_top     = _sorted_comm.reindex(
+                [s for s in _ra_top_idx if s in _sorted_comm.index], tolerance=None
+            ).dropna()
+            # Bottom: lowest-lift among the non-selected remainder
+            _remainder  = _non_and[~_non_and.index.astype(str).isin(_selected)]
+            _ra_bot     = _remainder.sort_values(ascending=True).head(5)
+
+            _ra_n_vals  = _seg_n_raw.reindex(_ra_top.index.astype(str)).fillna(0)
+            _ra_n_vals.index = _ra_top.index
             _ra_total_n = _ra_n_vals.sum()
             _ra_w_lift  = float((_ra_top * _ra_n_vals).sum() / _ra_total_n) if _ra_total_n > 0 else np.nan
-            _ra_n_dict  = _ra_n_vals.to_dict()
-            _ra_users   = df[
-                (df["contact_flag"] == 1)
-                & (df["communication"] == ra_comm)
-                & (df["nsegment"].isin(_ra_top.index))
-            ]["alpha_key"].nunique()
+            _ra_users   = int(_ra_total_n)
             _rm1, _rm2 = st.columns(2)
             _rm1.metric("Recommended audience", f"{_ra_users:,} customers")
             _rm2.metric(f"Expected {ra_label}", f"{_ra_w_lift:.2%}" if pd.notna(_ra_w_lift) else "—")
@@ -1256,23 +1283,70 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     .apply(lambda s: s.map(_rdylgn), subset=[ra_label], axis=0)\
                     .apply(lambda s: s.map(_n_color), subset=["N"], axis=0)
 
-            # Top N
-            st.caption(f"**Top {int(ra_top_n)} segments (highest lift)**")
-            _ra_styler2 = _make_single_comm_table(_ra_top)
-            _ra_h2 = max(300, min(600, 60 + int(ra_top_n) * 30))
-            components.html(
-                _styled_html_table(_ra_styler2, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_h2),
-                height=_ra_h2, scrolling=True,
-            )
-            _ra_shown_segs = [str(s) for s in _ra_top.index]
+            def _two_tables_html(items, height):
+                """Render multiple (label, styler) pairs into one HTML doc — zero spacing between tables."""
+                import re as _re3
+                _css = (
+                    "* { box-sizing: border-box; }"
+                    "body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;"
+                    "       font-size: 12px; background: transparent; color: #fafafa; margin: 0; padding: 4px; }"
+                    "table { border-collapse: collapse; width: 100%; }"
+                    "thead th { background: #262730; color: #fafafa; padding: 6px 10px;"
+                    "           text-align: left; position: sticky; top: 0; z-index: 2;"
+                    "           border-bottom: 2px solid #555; white-space: nowrap; font-size: 11px; }"
+                    "tbody td { padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; color: #111; }"
+                    "tbody tr:hover td { outline: 1px solid #666; }"
+                    "th.row_heading { background: #1c1e2a !important; font-size: 11px;"
+                    "                 color: #ccc !important; font-weight: normal; cursor: help; }"
+                    "th.blank { background: #262730 !important; }"
+                    ".tbl-lbl { font-size: 11px; font-weight: 600; color: #bbb;"
+                    "           padding: 8px 2px 2px 2px; border-top: 1px solid #444; margin-top: 4px; }"
+                    ".tbl-lbl:first-child { border-top: none; margin-top: 0; padding-top: 2px; }"
+                )
+                _blocks = []
+                for _lbl, _styler in items:
+                    _h = _styler.to_html()
+                    def _tip(m):
+                        _tp = m.group(1); _cv = m.group(2); _id = _cv.strip()
+                        _l = (SEGMENT_LABELS or {}).get(_id, ""); _d2 = (SEGMENT_DESCRIPTIONS or {}).get(_id, "")
+                        _t = f"{_l} \u2014 {_d2}" if _l and _d2 else (_l or _d2)
+                        if not _t: return m.group(0)
+                        return f'{_tp} data-tip="{_t.replace(chr(34), chr(39))}">{_cv}</th>'
+                    _h = _re3.sub(r'(<th[^>]*class="[^"]*row_heading[^"]*"[^>]*)>([^<]*)</th>', _tip, _h)
+                    _blocks.append(f'<div class="tbl-lbl">{_lbl}</div>{_h}')
+                _body = "".join(_blocks)
+                _js = (
+                    "(function(){var tt=document.createElement('div');"
+                    "tt.style.cssText='position:fixed;background:#1e2030;color:#eee;font-size:11px;"
+                    "padding:5px 9px;border-radius:4px;border:1px solid #555;z-index:99999;"
+                    "pointer-events:none;display:none;max-width:340px;word-wrap:break-word;"
+                    "line-height:1.5;white-space:normal;box-shadow:0 2px 8px rgba(0,0,0,.5);';"
+                    "document.body.appendChild(tt);"
+                    "document.querySelectorAll('[data-tip]').forEach(function(el){"
+                    "el.addEventListener('mouseenter',function(){tt.textContent=el.getAttribute('data-tip');tt.style.display='block';});"
+                    "el.addEventListener('mousemove',function(e){tt.style.left=(e.clientX+14)+'px';tt.style.top=(e.clientY+14)+'px';});"
+                    "el.addEventListener('mouseleave',function(){tt.style.display='none';});"
+                    "})})()"
+                )
+                return (
+                    f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
+                    f"<style>{_css}</style></head><body>"
+                    f"<div style='overflow:auto;max-height:{height-20}px;'>{_body}</div>"
+                    f"<script>{_js}</script></body></html>"
+                )
 
-            # Bottom N
-            st.caption(f"**Bottom {int(ra_bot_n)} segments (lowest lift)**")
+            _ra_styler2   = _make_single_comm_table(_ra_top)
             _ra_bot_styler = _make_single_comm_table(_ra_bot)
-            _ra_bot_h = max(200, min(500, 60 + int(ra_bot_n) * 30))
+            _ra_shown_segs = [str(s) for s in _ra_top.index]
+            _ra_bot_segs   = [str(s) for s in _ra_bot.index]
+
+            _combined_h = max(300, min(900, 80 + (len(_ra_top) + len(_ra_bot)) * 30))
             components.html(
-                _styled_html_table(_ra_bot_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_ra_bot_h),
-                height=_ra_bot_h, scrolling=True,
+                _two_tables_html([
+                    (f"Top {len(_ra_top)} segments (highest lift)", _ra_styler2),
+                    (f"Bottom {len(_ra_bot)} segments (lowest lift)", _ra_bot_styler),
+                ], _combined_h),
+                height=_combined_h, scrolling=True,
             )
         else:
             st.info(f"No {ra_label} data available for **{ra_comm}**.")
@@ -1281,12 +1355,11 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         if _ra_shown_segs:
             _, _ra_btn_col, _ = st.columns([1, 2, 1])
             if _ra_btn_col.button("📌 Send to Audience Simulator", key="ra_send_sim", use_container_width=True):
-                # Send exactly the recommended segments as-is (already filtered by OR/AND/NOT pool)
                 st.session_state["sim_segs"]          = _ra_shown_segs
-                st.session_state["sim_segs_and"]      = []   # clear — pool already applied AND
-                st.session_state["sim_segs_excl"]     = []   # clear — pool already applied NOT
-                st.session_state["sim_run_triggered"] = True  # auto-run on arrival
-                st.success(f"Sent {len(_ra_shown_segs)} segment{'s' if len(_ra_shown_segs) != 1 else ''} to the Audience Simulator tab.")
+                st.session_state["sim_segs_and"]      = []
+                st.session_state["sim_segs_excl"]     = _ra_bot_segs
+                st.session_state["sim_run_triggered"] = True
+                st.success(f"Sent {len(_ra_shown_segs)} segment{'s' if len(_ra_shown_segs) != 1 else ''} to the Audience Simulator (+ {len(_ra_bot_segs)} excluded).")
 
         # ── Segment Combo Explorer ────────────────────────────────────────────
         st.divider()
