@@ -974,7 +974,6 @@ with tab_explorer:
             _styled_html_table(_exp_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_exp_h),
             height=_exp_h, scrolling=True,
         )
-        st.caption(f"{len(_exp_base):,} segments across {_exp_base['Group'].nunique()} groups. Hover over a segment ID for its description.")
 
         st.divider()
 
@@ -1768,26 +1767,40 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             _default_sim = all_segs_sim[:min(10, len(all_segs_sim))]
 
         sim_segs = st.multiselect(
-            "Segments to INCLUDE in the simulation",
+            "OR — segments to include (union)",
             options=all_segs_sim,
             default=st.session_state.get("sim_segs", []),
-            # start empty — let the user pick, or use Send to Simulator from the Data tab
             format_func=lambda x: x,
             key="sim_segs",
+            help="A customer qualifies if they belong to ANY of these segments.",
         )
 
-        # Exclude multiselect
-        _excl_options = [s for s in all_segs_sim if s not in (sim_segs or [])]
+        # AND multiselect — intersection filter
+        sim_segs_and = st.multiselect(
+            "AND — must also be in (intersection)",
+            options=all_segs_sim,
+            default=[s for s in st.session_state.get("sim_segs_and", []) if s in all_segs_sim],
+            format_func=lambda x: x,
+            key="sim_segs_and",
+            help="When non-empty, only segments that appear in BOTH the OR list and this list are kept. "
+                 "Use this to narrow: e.g. OR=[A,B,C] AND=[B,C,D] → effective segments are {B,C}.",
+        )
+
+        # NOT multiselect — exclusion
         sim_segs_excl = st.multiselect(
-            "Segments to EXCLUDE from the simulation",
+            "NOT — segments to exclude",
             options=all_segs_sim,
             default=[s for s in st.session_state.get("sim_segs_excl", []) if s in all_segs_sim],
             format_func=lambda x: x,
             key="sim_segs_excl",
-            help="Any segment listed here is excluded from all calculations, even if it appears in the inclusion list above.",
+            help="Any segment listed here is removed from the final set, even if it appears above.",
         )
-        # Effective included segments = included minus excluded
-        _sim_segs_eff = [s for s in (sim_segs or []) if s not in sim_segs_excl]
+        # Effective segments: OR ∩ AND (if set) − NOT
+        _sim_segs_eff = [
+            s for s in (sim_segs or [])
+            if (not sim_segs_and or s in sim_segs_and)
+            and s not in sim_segs_excl
+        ]
 
         # Reset trigger if the segment selection has changed since the last run
         if _sim_segs_eff != st.session_state.get("_sim_segs_snapshot"):
