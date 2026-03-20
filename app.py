@@ -1561,8 +1561,22 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 .drop_duplicates(subset="alpha_key")
             )
 
-            # Control side: control customers in selected segments, minus NOT-suppressed
+            # Control side: control customers — restricted to the same AND population
+            # as the treated side, in selected segments, minus NOT-suppressed.
+            # Critical: if AND segments are set, control customers must also be in all
+            # AND segments, otherwise treated vs. control compare different populations.
             _ctrl_raw = df[(df["control_flag"] == 1) & (df["communication"] == ra_comm)]
+            if _and_idx:
+                _and_str_set_ctrl = set(str(s) for s in _and_idx)
+                _ctrl_cust_segs = (
+                    _ctrl_raw[_ctrl_raw["nsegment"].astype(str).isin(_and_str_set_ctrl)]
+                    .groupby("alpha_key")["nsegment"]
+                    .apply(lambda x: set(x.astype(str)))
+                )
+                _valid_and_ctrl = _ctrl_cust_segs[
+                    _ctrl_cust_segs.apply(lambda s: _and_str_set_ctrl.issubset(s))
+                ].index
+                _ctrl_raw = _ctrl_raw[_ctrl_raw["alpha_key"].isin(_valid_and_ctrl)]
             _ctrl_sel_custs: set = set()
             for _s in _ra_top_idx:
                 _ctrl_sel_custs |= set(
