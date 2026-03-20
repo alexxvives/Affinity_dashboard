@@ -1226,11 +1226,11 @@ Segments whose confidence interval (CI) is smaller than their lift are promoted 
 **Step 3 — Greedy selection until Min Audience is reached**  
 Segments are added one by one in ranked order. After each addition the algorithm counts the **unique** customers in the growing set (union, no double-counting). It stops as soon as that unique count reaches *Min audience*. The AND segments always seed the running total.
 
-**Step 4 — Expected Lift displayed**  
-The "Expected Lift" is a weighted average across the selected segments, where each segment's weight is its customer count within the AND-filtered pool.
+**Step 4 — NOT suppression**  
+The lowest-lift segments from the remainder are designated as NOT (avoid). Any customer who belongs to at least one NOT segment is **removed** from the final audience, even if they also qualify via a top segment. This is applied at the individual customer level.
 
-**Bottom segments**  
-The lowest-lift segments from the non-selected remainder are shown separately as an *avoid* reference.
+**Step 5 — Expected Lift displayed**  
+The "Expected Lift" is a weighted average across the selected segments, where each segment's weight is its **post-suppression** customer count (customers in that segment who are not in any NOT segment).
 """)
         _tbl_ra = tbl
 
@@ -1345,16 +1345,32 @@ The lowest-lift segments from the non-selected remainder are shown separately as
                 [s for s in _ra_top_idx if s in _sorted_comm.index], tolerance=None
             ).dropna()
 
-            # Bottom: lowest-lift from non-selected remainder (reference for NOT in Simulator)
+            # Bottom: lowest-lift from non-selected remainder (sent as NOT — customers suppressed)
             _bot_n        = max(3, min(15, len(_ra_top_idx) // 2))
             _remainder_df = _sort_df[~_sort_df.index.isin(_ra_top_idx)].sort_values('lift')
             _ra_bot       = _remainder_df['lift'].head(_bot_n)
 
-            # Metrics
-            _ra_n_vals  = _seg_n_raw.reindex(_ra_top.index.astype(str)).fillna(0)
+            # Build NOT customer set: anyone in a bottom segment is suppressed,
+            # even if they also qualify via a top segment
+            _not_custs: set = set()
+            for _bot_s in _ra_bot.index:
+                _bot_str = str(_bot_s)
+                if _bot_str not in _seg_custs_map:
+                    _seg_custs_map[_bot_str] = set(
+                        _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == _bot_str]["alpha_key"]
+                    )
+                _not_custs |= _seg_custs_map[_bot_str]
+
+            _final_custs = _running_custs - _not_custs
+
+            # Metrics — recompute per-segment N excluding suppressed customers
+            _ra_n_vals = pd.Series({
+                s: len(_seg_custs_map.get(str(s), set()) - _not_custs)
+                for s in _ra_top.index
+            }, dtype=float)
             _ra_n_vals.index = _ra_top.index
             _ra_w_lift  = float((_ra_top * _ra_n_vals).sum() / float(_ra_n_vals.sum())) if float(_ra_n_vals.sum()) > 0 else np.nan
-            _ra_users   = len(_running_custs)
+            _ra_users   = len(_final_custs)
 
             # Total customers reachable given the AND constraint (ceiling for greedy loop)
             _and_pool_total = int(_ra_comm_df_filt["alpha_key"].nunique())
@@ -1485,7 +1501,7 @@ The lowest-lift segments from the non-selected remainder are shown separately as
             components.html(
                 _two_tables_html([
                     (f"Top {len(_ra_top)} segments (highest lift)", _ra_styler2, [(ra_label, _ci_label)]),
-                    (f"Bottom {len(_ra_bot)} segments (lowest lift — sent as NOT to Simulator)", _ra_bot_styler, [(ra_label, _ci_label)]),
+                    (f"Bottom {len(_ra_bot)} segments (lowest lift — suppressed from final audience)", _ra_bot_styler, [(ra_label, _ci_label)]),
                 ], _combined_h),
                 height=_combined_h, scrolling=True,
             )
