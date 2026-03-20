@@ -1390,7 +1390,9 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
         _ra_col    = f"{ra_comm}{ra_suffix}"
         _ra_ci_col = f"{ra_comm}{'_lift_bal_ci' if ra_metric == 'Balance lift' else '_lift_acct_ci'}"
         _ra_n_col  = f"{ra_comm}_n"
+        _ra_placeholder = st.empty()
         if _ra_col in _tbl_ra.columns:
+            _ra_placeholder.info(f"⏳ Building recommended audience for **{ra_comm}**…")
             # Base naïve-mean lift (used as fallback for segments with too few observations)
             _naive_comm = _tbl_ra[_ra_col].dropna()
             _naive_comm.index = _naive_comm.index.astype(str)
@@ -1403,8 +1405,7 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             # HC1-robust SEs give calibrated ±CI for each marginal estimate.
             # Falls back to the naïve group-mean lift for any segment insufficiently sampled.
             _reg_outcome_col = "balance_pct_change" if ra_suffix == "_lift_bal" else "accounts_pct_change"
-            with st.spinner(f"Computing marginal lifts for {ra_comm} (OLS regression)…"):
-                _reg_df = marginal_lift_regression(df, ra_comm, _reg_outcome_col)
+            _reg_df = marginal_lift_regression(df, ra_comm, _reg_outcome_col)
             _reg_df.index = _reg_df.index.astype(str)
 
             if not _reg_df.empty:
@@ -1771,7 +1772,9 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 ], _combined_h),
                 height=_combined_h, scrolling=True,
             )
+            _ra_placeholder.empty()
         else:
+            _ra_placeholder.empty()
             st.info(f"No {ra_label} data available for **{ra_comm}**.")
 
         # ── Send recommended segments to Simulator ───────────────────────
