@@ -1330,13 +1330,11 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 **Step 1 — AND filter (optional)**  
 If you pick any *AND — mandatory segments*, only customers who belong to **all** of them are kept. Everything downstream (audience size, lift, N) is computed on this restricted pool.
 
-**Step 2 — Marginal lift per segment (OLS regression)**  
-Each segment's lift is estimated by fitting a regression model on the full population for this communication. The model answers: *"If I hold every other segment constant, how much extra balance change does belonging to this segment cause when contacted?"*  
-This removes the bias that would arise from users belonging to multiple segments — a segment that merely co-occurs with a strong segment will no longer inherit its good score.  
-Segments whose estimate has a sufficiently tight confidence interval (CI smaller than the lift itself) are promoted to **Tier 1** (statistically reliable). The rest go to Tier 2. Within each tier, highest marginal lift appears first.
+**Step 2 — Lift per segment**  
+Each segment's lift is the simple difference between the mean outcome of treated customers in that segment versus matched control customers in the same segment. Segments are ranked highest lift first.
 
 **Step 3 — Rank-order greedy selection until Min Audience is reached**  
-Segments are added in descending lift order (Tier 1 first, then Tier 2) until the total unique customer count reaches *Min audience*. The highest-lift segments always come first.
+Segments are added in descending lift order until the total unique customer count reaches *Min audience*. The highest-lift segments always come first.
 
 **Step 4 — NOT suppression (bottom segments excluded)**  
 The lowest-lift segments from the remainder are flagged as NOT (avoid). Any customer in at least one NOT segment is **removed** from the final audience — even if they qualify via a top segment. Applied at individual customer level.
@@ -1393,43 +1391,17 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
         _ra_placeholder = st.empty()
         if _ra_col in _tbl_ra.columns:
             _ra_placeholder.info(f"⏳ Building recommended audience for **{ra_comm}**…")
-            # Base naïve-mean lift (used as fallback for segments with too few observations)
+            # Naïve per-segment lift directly from the precomputed table
             _naive_comm = _tbl_ra[_ra_col].dropna()
             _naive_comm.index = _naive_comm.index.astype(str)
+            _ci_series = (
+                _tbl_ra[_ra_ci_col].reindex(_naive_comm.index).astype(float)
+                if _ra_ci_col in _tbl_ra.columns
+                else pd.Series(np.nan, index=_naive_comm.index)
+            )
+            _ci_series.index = _ci_series.index.astype(str)
 
-            # ── Marginal OLS lift ────────────────────────────────────────────────────
-            # Fit outcome ~ treated + Σ seg_s + Σ (treated × seg_s) via sparse OLS on
-            # the full communication population.  The γ_s interaction coefficients are
-            # each segment's causal lift *controlling for every other segment membership*,
-            # eliminating the confounding that arises when users belong to multiple segments.
-            # HC1-robust SEs give calibrated ±CI for each marginal estimate.
-            # Falls back to the naïve group-mean lift for any segment insufficiently sampled.
-            _reg_outcome_col = "balance_pct_change" if ra_suffix == "_lift_bal" else "accounts_pct_change"
-            _reg_df = marginal_lift_regression(df, ra_comm, _reg_outcome_col)
-            _reg_df.index = _reg_df.index.astype(str)
-
-            if not _reg_df.empty:
-                _ml     = _reg_df["marginal_lift"].reindex(_naive_comm.index)
-                _ml_ci  = _reg_df["marginal_lift_ci"].reindex(_naive_comm.index)
-                # Fallback: if the regression produced NaN for a segment (insufficient N),
-                # use the naïve mean-difference lift so every segment retains a ranking
-                _lift_vals = _ml.fillna(_naive_comm)
-                _ci_vals   = _ml_ci.fillna(
-                    _tbl_ra[_ra_ci_col].reindex(_naive_comm.index)
-                    if _ra_ci_col in _tbl_ra.columns else pd.Series(np.nan, index=_naive_comm.index)
-                )
-            else:
-                _lift_vals = _naive_comm.copy()
-                _ci_vals   = (
-                    _tbl_ra[_ra_ci_col].reindex(_naive_comm.index).astype(float)
-                    if _ra_ci_col in _tbl_ra.columns
-                    else pd.Series(np.nan, index=_naive_comm.index)
-                )
-                _ci_vals.index = _ci_vals.index.astype(str)
-                st.caption("⚠️ Insufficient data for OLS regression — using naïve group-mean lift.")
-
-            _sorted_comm = _lift_vals.sort_values(ascending=False).dropna()
-            _ci_series   = _ci_vals  # aligned to _naive_comm.index (str)
+            _sorted_comm = _naive_comm.sort_values(ascending=False)
 
             # Per-segment unique-customer counts for this communication,
             # filtered to only customers who also appear in ALL AND segments (if any set)
@@ -1456,16 +1428,9 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             # AND segments — hard constraints (must be present in the table)
             _and_idx = _and_idx_pre
 
-            # CI-aware tier: segments where |CI| ≤ |lift| (i.e. CI does not cross zero)
-            # get priority tier 1; unreliable get tier 2.  Within each tier, ranked by lift.
-            # Both _sorted_comm and _ci_series now use string indices and marginal OLS values.
-            def _reliable(seg):
-                l = _sorted_comm.get(seg, np.nan)
-                c = _ci_series.get(seg, np.nan) if seg in _ci_series.index else np.nan
-                return int(pd.notna(l) and pd.notna(c) and abs(c) <= abs(l))
-            _reliability = pd.Series({s: _reliable(s) for s in _sorted_comm.index})
-            _sort_df = pd.DataFrame({'lift': _sorted_comm, 'tier': _reliability})
-            _sort_df = _sort_df.sort_values(['tier', 'lift'], ascending=[False, False])
+            # Sort segments by lift descending (no tiers — simpler and faster)
+            _sort_df = pd.DataFrame({'lift': _sorted_comm})
+            _sort_df = _sort_df.sort_values('lift', ascending=False)
 
             # Simple rank-order greedy: take segments in descending lift order
             # until the min audience target is reached.
@@ -1478,7 +1443,7 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 )
             _running_custs: set = set().union(*[_seg_custs_map[str(s)] for s in _and_idx]) if _and_idx else set()
             _selected: List[str] = []
-            _remaining = list(_non_and.index)  # already sorted by tier then lift descending
+            _remaining = list(_non_and.index)  # already sorted by lift descending
 
             # Pre-load all customer sets up front
             for _seg in _remaining:
