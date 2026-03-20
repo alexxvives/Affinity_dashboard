@@ -1,0 +1,41 @@
+nsegment,label,description,group
+1000000,High-net-worth,Balance >EUR50k — premium card holder,High-net-worth
+1000001,High-net-worth,Balance >EUR50k — investment products,High-net-worth
+1000002,High-net-worth,Balance >EUR50k — mortgage & savings,High-net-worth
+1000003,Young professional,"Age 25-35, salary deposited monthly",Young professional
+1000004,Young professional,"Age 25-35, mobile-first engagement",Young professional
+1000005,Young professional,"Age 25-35, first mortgage applicant",Young professional
+1000006,Mortgage holder,"Outstanding mortgage, <10 yrs remaining",Mortgage holder
+1000007,Mortgage holder,"Outstanding mortgage, >10 yrs remaining",Mortgage holder
+1000008,Mortgage holder,Mortgage + insurance bundle,Mortgage holder
+1000009,Recent opener,Account opened <90 days ago,Recent opener
+1000010,Recent opener,"Account opened <90 days, first deposit",Recent opener
+1000011,Pensioner,"Age >65, regular pension income",Pensioner
+1000012,Pensioner,"Age >65, care package products",Pensioner
+1000013,Pensioner,"Age >65, savings-focused",Pensioner
+1000014,SME owner,Business current account holder,SME owner
+1000015,SME owner,Business account + credit line,SME owner
+1000016,Multi-product,Holds 3+ product types,Multi-product
+1000017,Multi-product,Holds 4+ product types,Multi-product
+1000018,Multi-product,Holds 5+ product types,Multi-product
+1000019,Digital-only,No branch visits in 12 months,Digital-only
+1000020,Digital-only,"App-only customer, no card swipes in-branch",Digital-only
+1000021,Digital-only,"All interactions digital, high login frequency",Digital-only
+1000022,Dormant,No transactions in 6-12 months,Dormant
+1000023,Dormant,No transactions in >12 months,Dormant
+1000024,Student,Enrolled in student programme,Student
+1000025,Student,Student loan or overdraft active,Student
+1000026,Savings-first,Primary account is savings account,Savings-first
+1000027,Savings-first,High monthly savings rate (>20% of income),Savings-first
+1000028,Credit-active,Credit card active past 30 days,Credit-active
+1000029,Credit-active,Credit card + personal loan,Credit-active
+1000030,Credit-active,Overdraft usage >50% of limit,Credit-active
+1000031,International,Foreign currency transactions in last 90 days,International
+1000032,International,Dual-nationality or expat products,International
+1000033,Rural,Branch in rural postcode,Rural
+1000034,Rural,"Low digital engagement, rural location",Rural
+1000035,Urban core,Branch in top-5 city,Urban core
+1000036,Urban core,"Urban, high-transaction volume",Urban core
+1000037,Urban core,"Urban, contactless & tap-pay dominant",Urban core
+1000038,New-to-bank,Joined in last 30 days,New-to-bank
+1000039,New-to-bank,Joined in last 30-90 days,New-to-bank
