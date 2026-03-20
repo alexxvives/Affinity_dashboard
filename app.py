@@ -1337,7 +1337,7 @@ Each segment's lift is the simple difference between the mean outcome of treated
 Segments are added in descending lift order until the total unique customer count reaches *Min audience*. The highest-lift segments always come first.
 
 **Step 4 — NOT suppression (bottom segments excluded)**  
-The lowest-lift segments from the remainder are flagged as NOT (avoid). A customer is removed from the final audience only if they belong to **all** of the NOT segments simultaneously (AND logic). Being in just one bad segment is not enough to suppress a customer.
+The lowest-lift segments from the remainder are flagged as NOT (avoid). Any customer in **at least one** NOT segment is removed from the final audience — even if they also qualify via a top segment.
 
 **Step 5 — Expected Lift shown**  
 The displayed lift is computed directly on the **final recommended cohort**: each customer counted once, compared to the matched control group. This is the lift you should actually observe if those customers are contacted.
@@ -1469,24 +1469,16 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             _remainder_df = _sort_df[~_sort_df.index.isin(_ra_top_idx)].sort_values('lift')
             _ra_bot       = _remainder_df['lift'].head(_bot_n)
 
-            # Build NOT customer set: only suppress customers who are in ALL bottom
-            # segments simultaneously (AND logic). A customer in just one bad segment
-            # but not all of them is kept.
-            _not_custs: set
-            if _ra_bot.empty:
-                _not_custs = set()
-            else:
-                for _bot_s in _ra_bot.index:
-                    _bot_str = str(_bot_s)
-                    if _bot_str not in _seg_custs_map:
-                        _seg_custs_map[_bot_str] = set(
-                            _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == _bot_str]["alpha_key"]
-                        )
-                # Intersection: only customers present in every NOT segment
-                _not_sets = [_seg_custs_map[str(s)] for s in _ra_bot.index]
-                _not_custs = _not_sets[0].copy()
-                for _ns in _not_sets[1:]:
-                    _not_custs &= _ns
+            # Build NOT customer set: anyone in ANY bottom segment is suppressed,
+            # even if they also qualify via a top segment (OR logic).
+            _not_custs: set = set()
+            for _bot_s in _ra_bot.index:
+                _bot_str = str(_bot_s)
+                if _bot_str not in _seg_custs_map:
+                    _seg_custs_map[_bot_str] = set(
+                        _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == _bot_str]["alpha_key"]
+                    )
+                _not_custs |= _seg_custs_map[_bot_str]
 
             _final_custs = _running_custs - _not_custs
 
@@ -1539,17 +1531,11 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 _ctrl_sel_custs |= set(
                     _ctrl_raw[_ctrl_raw["nsegment"].astype(str) == str(_s)]["alpha_key"]
                 )
-            _not_custs_ctrl: set
-            if _ra_bot.empty:
-                _not_custs_ctrl = set()
-            else:
-                _not_ctrl_sets = [
-                    set(_ctrl_raw[_ctrl_raw["nsegment"].astype(str) == str(_bot_s)]["alpha_key"])
-                    for _bot_s in _ra_bot.index
-                ]
-                _not_custs_ctrl = _not_ctrl_sets[0].copy()
-                for _ns in _not_ctrl_sets[1:]:
-                    _not_custs_ctrl &= _ns
+            _not_custs_ctrl: set = set()
+            for _bot_s in _ra_bot.index:
+                _not_custs_ctrl |= set(
+                    _ctrl_raw[_ctrl_raw["nsegment"].astype(str) == str(_bot_s)]["alpha_key"]
+                )
             _ctrl_cohort = (
                 _ctrl_raw[_ctrl_raw["alpha_key"].isin(_ctrl_sel_custs - _not_custs_ctrl)]
                 .drop_duplicates(subset="alpha_key")
