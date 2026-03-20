@@ -1358,9 +1358,19 @@ The lowest-lift segments from the non-selected remainder are shown separately as
             _ra_users   = int(
                 _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str).isin(_ra_top_str)]["alpha_key"].nunique()
             )
+            # Total customers reachable given the AND constraint (ceiling for greedy loop)
+            _and_pool_total = int(_ra_comm_df_filt["alpha_key"].nunique())
             _rm1, _rm2 = st.columns(2)
             _rm1.metric("Recommended audience", f"{_ra_users:,} customers")
             _rm2.metric(f"Expected {ra_label}", f"{_ra_w_lift:.2%}" if pd.notna(_ra_w_lift) else "—")
+            if _and_idx and _and_pool_total < ra_min_aud:
+                st.warning(
+                    f"⚠️ The AND constraint limits the total available audience to **{_and_pool_total:,} customers** "
+                    f"for *{ra_comm}* — the min audience target of **{ra_min_aud:,}** cannot be reached. "
+                    f"All {_and_pool_total:,} qualifying customers have been selected. "
+                    f"Remove AND segments or lower the min audience to proceed normally.",
+                    icon=None,
+                )
             _ci_label = f"{ra_label} ±CI"
 
             def _make_single_comm_table(series):
