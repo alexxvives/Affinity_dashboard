@@ -1214,6 +1214,24 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             "Optimal segment groupings for each communication, ranked by lift. "
             "Use these as ready-made targeting lists — no manual segment selection needed."
         )
+        with st.expander("ℹ️ How the audience is built", expanded=False):
+            st.markdown("""
+**Step 1 — AND filter (if set)**  
+If you add segments to *AND — mandatory segments*, only customers who appear in **all** of those segments are kept. Every number shown (audience size, lift, N) is computed on this restricted pool.
+
+**Step 2 — Rank remaining segments by lift**  
+All segments *not* in the AND list are sorted by expected lift for the chosen communication.  
+Segments whose confidence interval (CI) is smaller than their lift are promoted to Tier 1 (statistically reliable); the rest go to Tier 2. Within each tier, ordering is highest-lift first.
+
+**Step 3 — Greedy selection until Min Audience is reached**  
+Segments are added one by one in ranked order. After each addition the algorithm counts the **unique** customers in the growing set (union, no double-counting). It stops as soon as that unique count reaches *Min audience*. The AND segments always seed the running total.
+
+**Step 4 — Expected Lift displayed**  
+The "Expected Lift" is a weighted average across the selected segments, where each segment's weight is its customer count within the AND-filtered pool.
+
+**Bottom segments**  
+The lowest-lift segments from the non-selected remainder are shown separately as an *avoid* reference.
+""")
         _tbl_ra = tbl
 
         _ra_c1, _ra_c2, _ra_c3, _ra_c4 = st.columns([2, 2, 2, 1])
@@ -1301,15 +1319,26 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             _sort_df = pd.DataFrame({'lift': _sorted_str, 'tier': _reliability})
             _sort_df = _sort_df.sort_values(['tier', 'lift'], ascending=[False, False])
 
-            # Greedy top-lift selection until cumulative audience >= ra_min_aud
+            # Greedy top-lift selection until cumulative *unique* audience >= ra_min_aud
             _non_and = _sort_df[~_sort_df.index.isin(_and_idx)]
-            _aud_running = float(_seg_n_raw.reindex(_and_idx).fillna(0).sum())
+            # Seed running set with AND-filtered customers already in AND segments
+            _and_str_set = set(str(s) for s in _and_idx)
+            _running_custs: set = set(
+                _ra_comm_df_filt[
+                    _ra_comm_df_filt["nsegment"].astype(str).isin(_and_str_set)
+                ]["alpha_key"]
+            ) if _and_idx else set()
             _selected: List[str] = []
             for _seg in _non_and.index:
-                if _aud_running >= ra_min_aud:
+                if len(_running_custs) >= ra_min_aud:
                     break
+                _seg_custs = set(
+                    _ra_comm_df_filt[
+                        _ra_comm_df_filt["nsegment"].astype(str) == str(_seg)
+                    ]["alpha_key"]
+                )
                 _selected.append(_seg)
-                _aud_running += float(_seg_n_raw.get(_seg, 0))
+                _running_custs |= _seg_custs
 
             _ra_top_idx = list(dict.fromkeys(_and_idx + _selected))
             _ra_top     = _sorted_comm.reindex(
