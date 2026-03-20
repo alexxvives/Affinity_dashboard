@@ -1337,7 +1337,7 @@ Each segment's lift is the simple difference between the mean outcome of treated
 Segments are added in descending lift order until the total unique customer count reaches *Min audience*. The highest-lift segments always come first.
 
 **Step 4 — NOT suppression (bottom segments excluded)**  
-The lowest-lift segments from the remainder are flagged as NOT (avoid). Any customer in at least one NOT segment is **removed** from the final audience — even if they qualify via a top segment. Applied at individual customer level.
+The lowest-lift segments from the remainder are flagged as NOT (avoid). A customer is removed from the final audience only if they belong to **all** of the NOT segments simultaneously (AND logic). Being in just one bad segment is not enough to suppress a customer.
 
 **Step 5 — Expected Lift shown**  
 The displayed lift is computed directly on the **final recommended cohort**: each customer counted once, compared to the matched control group. This is the lift you should actually observe if those customers are contacted.
@@ -1469,16 +1469,24 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             _remainder_df = _sort_df[~_sort_df.index.isin(_ra_top_idx)].sort_values('lift')
             _ra_bot       = _remainder_df['lift'].head(_bot_n)
 
-            # Build NOT customer set: anyone in a bottom segment is suppressed,
-            # even if they also qualify via a top segment
-            _not_custs: set = set()
-            for _bot_s in _ra_bot.index:
-                _bot_str = str(_bot_s)
-                if _bot_str not in _seg_custs_map:
-                    _seg_custs_map[_bot_str] = set(
-                        _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == _bot_str]["alpha_key"]
-                    )
-                _not_custs |= _seg_custs_map[_bot_str]
+            # Build NOT customer set: only suppress customers who are in ALL bottom
+            # segments simultaneously (AND logic). A customer in just one bad segment
+            # but not all of them is kept.
+            _not_custs: set
+            if _ra_bot.empty:
+                _not_custs = set()
+            else:
+                for _bot_s in _ra_bot.index:
+                    _bot_str = str(_bot_s)
+                    if _bot_str not in _seg_custs_map:
+                        _seg_custs_map[_bot_str] = set(
+                            _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == _bot_str]["alpha_key"]
+                        )
+                # Intersection: only customers present in every NOT segment
+                _not_sets = [_seg_custs_map[str(s)] for s in _ra_bot.index]
+                _not_custs = _not_sets[0].copy()
+                for _ns in _not_sets[1:]:
+                    _not_custs &= _ns
 
             _final_custs = _running_custs - _not_custs
 
@@ -1489,33 +1497,6 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             }, dtype=float)
             _ra_n_vals.index = _ra_top.index
             _ra_users = len(_final_custs)
-
-            # ── Coverage-weighted blended lift ────────────────────────────────────
-            # Each unique customer is credited to the first segment that "claimed" them
-            # in greedy order (AND segments first, then greedy, then Tier1 extras).
-            # This gives a properly deduplicated weighted average of per-segment naive
-            # lifts — consistent with the table values, no double-counting.
-            _cov_running: set = set()
-            _cov_num = 0.0
-            _cov_den = 0
-            # AND segments: treat their union as the base
-            if _and_idx:
-                _and_in_final = set().union(*[_seg_custs_map[str(s)] for s in _and_idx]) - _not_custs
-                # Average naive lift of AND segments
-                _and_naive_vals = [float(_naive_comm.get(str(s), np.nan)) for s in _and_idx]
-                _and_naive_avg  = float(np.nanmean(_and_naive_vals)) if _and_naive_vals else np.nan
-                if pd.notna(_and_naive_avg) and _and_in_final:
-                    _cov_num += len(_and_in_final) * _and_naive_avg
-                    _cov_den += len(_and_in_final)
-                _cov_running |= set().union(*[_seg_custs_map[str(s)] for s in _and_idx])
-            for _s in _selected:
-                _marginal_in_final = (_seg_custs_map[str(_s)] - _cov_running) - _not_custs
-                _cov_running |= _seg_custs_map[str(_s)]
-                _s_naive = float(_naive_comm.get(str(_s), np.nan))
-                if pd.notna(_s_naive) and _marginal_in_final:
-                    _cov_num += len(_marginal_in_final) * _s_naive
-                    _cov_den += len(_marginal_in_final)
-            _blended_lift = _cov_num / _cov_den if _cov_den > 0 else np.nan
 
             # ── Cohort-level lift (direct, per-customer) ─────────────────────────
             # Each recommended customer is counted exactly ONCE regardless of how
@@ -1558,11 +1539,17 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 _ctrl_sel_custs |= set(
                     _ctrl_raw[_ctrl_raw["nsegment"].astype(str) == str(_s)]["alpha_key"]
                 )
-            _not_custs_ctrl: set = set()
-            for _bot_s in _ra_bot.index:
-                _not_custs_ctrl |= set(
-                    _ctrl_raw[_ctrl_raw["nsegment"].astype(str) == str(_bot_s)]["alpha_key"]
-                )
+            _not_custs_ctrl: set
+            if _ra_bot.empty:
+                _not_custs_ctrl = set()
+            else:
+                _not_ctrl_sets = [
+                    set(_ctrl_raw[_ctrl_raw["nsegment"].astype(str) == str(_bot_s)]["alpha_key"])
+                    for _bot_s in _ra_bot.index
+                ]
+                _not_custs_ctrl = _not_ctrl_sets[0].copy()
+                for _ns in _not_ctrl_sets[1:]:
+                    _not_custs_ctrl &= _ns
             _ctrl_cohort = (
                 _ctrl_raw[_ctrl_raw["alpha_key"].isin(_ctrl_sel_custs - _not_custs_ctrl)]
                 .drop_duplicates(subset="alpha_key")
@@ -1583,23 +1570,15 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
 
             # Total customers reachable given the AND constraint (ceiling for greedy loop)
             _and_pool_total = int(_ra_comm_df_filt["alpha_key"].nunique())
-            _rm1, _rm2, _rm3 = st.columns(3)
+            _rm1, _rm2 = st.columns(2)
             _rm1.metric("Recommended audience", f"{_ra_users:,} customers")
             _lift_display = f"{_ra_w_lift:.2%}" if pd.notna(_ra_w_lift) else "—"
             if pd.notna(_ra_lift_ci):
                 _lift_display += f"  ±{_ra_lift_ci:.2%}"
             _rm2.metric(
-                f"Cohort lift ({ra_label})",
+                f"Expected {ra_label}",
                 _lift_display,
-                help="Treated audience mean minus matched-control mean — each customer counted once. "
-                     "This is the historically observed outcome for this exact audience.",
-            )
-            _blended_display = f"{_blended_lift:.2%}" if pd.notna(_blended_lift) else "—"
-            _rm3.metric(
-                f"Blended segment lift ({ra_label})",
-                _blended_display,
-                help="N-weighted average of per-segment lifts, weighted by how many unique customers "
-                     "each segment contributes. Consistent with the table values below.",
+                help="Treated audience mean minus matched-control mean — each customer counted once.",
             )
             if _and_idx and _and_pool_total < ra_min_aud:
                 st.warning(
