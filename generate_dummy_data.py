@@ -153,7 +153,7 @@ def generate_dummy_dataset(n_users=5000, n_rows=100000, seed=42):
 
 if __name__ == '__main__':
     df_dummy = generate_dummy_dataset(n_users=5000, n_rows=100000, seed=42)
-    df_dummy.to_csv('dummy_segment_data.csv', index=False)
-    print('Dummy dataset written: dummy_segment_data.csv')
+    df_dummy.to_csv('data.csv', index=False)
+    print('Dummy dataset written: data.csv')
     print(f"Rows: {len(df_dummy):,}   Users: {df_dummy['alpha_key'].nunique():,}")
     print(df_dummy.groupby('Communication')['alpha_key'].count().sort_values(ascending=False))

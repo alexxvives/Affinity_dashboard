@@ -1030,11 +1030,11 @@ st.caption(
 
 # ── Load raw CSV ──────────────────────────────────────────────────────────────
 try:
-    with open(_APP_DIR / "dummy_segment_data.csv", "rb") as f:
+    with open(_APP_DIR / "data.csv", "rb") as f:
         raw_bytes = f.read()
     df_raw = _load_csv(raw_bytes)
 except FileNotFoundError:
-    st.error("dummy_segment_data.csv not found — run `python generate_dummy_data.py` first.")
+    st.error("data.csv not found — run `python generate_dummy_data.py` first.")
     st.stop()
 
 missing_cols = [c for c in REQUIRED_COLS if c not in df_raw.columns]
