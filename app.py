@@ -1335,8 +1335,8 @@ Each segment's lift is estimated by fitting a regression model on the full popul
 This removes the bias that would arise from users belonging to multiple segments — a segment that merely co-occurs with a strong segment will no longer inherit its good score.  
 Segments whose estimate has a sufficiently tight confidence interval (CI smaller than the lift itself) are promoted to **Tier 1** (statistically reliable). The rest go to Tier 2. Within each tier, highest marginal lift appears first.
 
-**Step 3 — Smart greedy selection until Min Audience is reached**  
-Rather than adding segments purely in rank order, at each step the algorithm picks whichever remaining segment delivers the **most value for money**: *(new unique customers it would add) × (its marginal lift)*. This means a slightly lower-lift segment that reaches many customers nobody else covers can beat a high-lift segment that almost entirely overlaps with what is already selected. It stops as soon as the growing unique customer count reaches *Min audience*.
+**Step 3 — Rank-order greedy selection until Min Audience is reached**  
+Segments are added in descending lift order (Tier 1 first, then Tier 2) until the total unique customer count reaches *Min audience*. The highest-lift segments always come first.
 
 **Step 4 — NOT suppression (bottom segments excluded)**  
 The lowest-lift segments from the remainder are flagged as NOT (avoid). Any customer in at least one NOT segment is **removed** from the final audience — even if they qualify via a top segment. Applied at individual customer level.
@@ -1466,11 +1466,8 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             _sort_df = pd.DataFrame({'lift': _sorted_comm, 'tier': _reliability})
             _sort_df = _sort_df.sort_values(['tier', 'lift'], ascending=[False, False])
 
-            # Marginal-gain greedy: at each step pick the segment maximising
-            # (marginal unique customers × segment lift).  This is provably
-            # better than rank-order greedy when segments overlap heavily,
-            # and carries a (1–1/e) ≈ 63 % optimality guarantee for
-            # coverage-type objectives (Nemhauser et al. 1978).
+            # Simple rank-order greedy: take segments in descending lift order
+            # until the min audience target is reached.
             _non_and = _sort_df[~_sort_df.index.isin(_and_idx)]
             _and_str_set = set(str(s) for s in _and_idx)
             _seg_custs_map: dict = {}
@@ -1480,9 +1477,9 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 )
             _running_custs: set = set().union(*[_seg_custs_map[str(s)] for s in _and_idx]) if _and_idx else set()
             _selected: List[str] = []
-            _remaining = list(_non_and.index)
+            _remaining = list(_non_and.index)  # already sorted by tier then lift descending
 
-            # Pre-load all customer sets up front (≤40 segments — negligible cost)
+            # Pre-load all customer sets up front
             for _seg in _remaining:
                 _s_str = str(_seg)
                 if _s_str not in _seg_custs_map:
@@ -1490,20 +1487,11 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                         _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == _s_str]["alpha_key"]
                     )
 
-            while len(_running_custs) < ra_min_aud and _remaining:
-                _best_seg, _best_score = None, -np.inf
-                for _seg in _remaining:
-                    _marginal_n = len(_seg_custs_map[str(_seg)] - _running_custs)
-                    if _marginal_n == 0:
-                        continue  # fully overlapping — cannot grow the audience
-                    _score = _marginal_n * float(_sorted_comm.get(_seg, 0.0))
-                    if _score > _best_score:
-                        _best_score, _best_seg = _score, _seg
-                if _best_seg is None:
-                    break  # no segment can add new customers — audience ceiling reached
-                _selected.append(_best_seg)
-                _running_custs |= _seg_custs_map[str(_best_seg)]
-                _remaining.remove(_best_seg)
+            for _seg in _remaining:
+                if len(_running_custs) >= ra_min_aud:
+                    break
+                _selected.append(_seg)
+                _running_custs |= _seg_custs_map[str(_seg)]
 
             _ra_top_idx = list(dict.fromkeys(_and_idx + _selected))
             _ra_top     = _sorted_comm.reindex(
