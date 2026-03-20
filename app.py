@@ -1505,25 +1505,6 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 _running_custs |= _seg_custs_map[str(_best_seg)]
                 _remaining.remove(_best_seg)
 
-            # Second pass: always include all statistically reliable (Tier 1) segments
-            # with positive lift that weren't picked up by the first greedy loop.
-            # This ensures the recommendation surfaces the full set of confident segments
-            # regardless of how small ra_min_aud is.
-            _tier1_extra = sorted(
-                [
-                    s for s in _remaining
-                    if _sort_df.at[s, 'tier'] == 1 and float(_sorted_comm.get(s, 0.0)) > 0
-                ],
-                key=lambda s: float(_sorted_comm.get(s, 0.0)),
-                reverse=True,
-            )
-            for _seg in _tier1_extra:
-                _marginal_n = len(_seg_custs_map[str(_seg)] - _running_custs)
-                if _marginal_n > 0:
-                    _selected.append(_seg)
-                    _running_custs |= _seg_custs_map[str(_seg)]
-                    _remaining.remove(_seg)
-
             _ra_top_idx = list(dict.fromkeys(_and_idx + _selected))
             _ra_top     = _sorted_comm.reindex(
                 [s for s in _ra_top_idx if s in _sorted_comm.index], tolerance=None
@@ -1863,11 +1844,18 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             if _combo_data:
                 _combo_df = pd.DataFrame(_combo_data).sort_values("Synergy", ascending=False)
                 # Scatter: X = combo lift, Y = synergy, size = N customers
+                # Scale bubble sizes relative to the data so the largest is always prominent.
+                _n_max = _combo_df["N customers"].max()
+                _n_min = _combo_df["N customers"].min()
+                # Normalise to [8, 40] px diameter range
+                _n_range = max(_n_max - _n_min, 1)
+                _combo_df["_bubble_sz"] = 8 + 32 * (_combo_df["N customers"] - _n_min) / _n_range
                 _ce_fig = px.scatter(
                     _combo_df,
                     x="Combo Lift Bal",
                     y="Synergy",
-                    size="N customers",
+                    size="_bubble_sz",
+                    size_max=40,
                     color="Synergy",
                     color_continuous_scale="RdYlGn",
                     hover_name="Segments",
