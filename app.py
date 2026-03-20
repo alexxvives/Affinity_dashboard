@@ -1638,14 +1638,20 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             _ci_label = f"{ra_label} ±CI"
 
             def _make_single_comm_table(series):
-                # Use regression marginal CIs where available (same source as ranking)
-                _ci_v = _ci_series.reindex(series.index.astype(str)).values if not _ci_series.empty else [np.nan] * len(series)
+                # Display the same direct (naïve) lift as the Data table above for consistency.
+                # OLS marginal lifts are used only for internal ranking/greedy selection.
+                _naive_disp = _naive_comm.reindex(series.index.astype(str))
+                _ci_v = (
+                    _tbl_ra[_ra_ci_col].rename(index=str).reindex(series.index.astype(str)).values
+                    if _ra_ci_col in _tbl_ra.columns
+                    else [np.nan] * len(series)
+                )
                 _n_v  = [int(_tbl_ra.at[s, _ra_n_col]) if _ra_n_col in _tbl_ra.columns and s in _tbl_ra.index else 0 for s in series.index]
                 _d = pd.DataFrame({
-                    "Label":   [SEGMENT_LABELS.get(str(s), "") for s in series.index],
-                    ra_label:  series.values,
-                    _ci_label: _ci_v,
-                    "N":       _n_v,
+                    "Description": [SEGMENT_DESCRIPTIONS.get(str(s), SEGMENT_LABELS.get(str(s), "")) for s in series.index],
+                    ra_label:      _naive_disp.values,
+                    _ci_label:     _ci_v,
+                    "N":           _n_v,
                 }, index=series.index)
                 _d.index.name = None
                 return _d.style.format({ra_label: _pct_fmt_ra, _ci_label: _pct_fmt_ra, "N": "{:,.0f}"}, na_rep="")\
@@ -1664,6 +1670,7 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                     "           text-align: left; position: sticky; top: 0; z-index: 2;"
                     "           border-bottom: 2px solid #555; white-space: nowrap; font-size: 11px; }"
                     "tbody td { padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; color: #111; }"
+                    "tbody td:first-child { white-space: normal; word-break: break-word; }"
                     "tbody tr:hover td { outline: 1px solid #666; }"
                     "th.row_heading { background: #1c1e2a !important; font-size: 11px;"
                     "                 color: #ccc !important; font-weight: normal; cursor: help;"
@@ -1713,7 +1720,7 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                     # Inject colgroup so every table in this iframe uses identical column widths
                     _ncols_inj = 1 + len(_styler.data.columns)  # index col + data cols
                     _pct_map = {
-                        5: [12, 35, 20, 23, 10],
+                        5: [10, 46, 16, 18, 10],
                         4: [14, 42, 25, 19],
                         6: [10, 30, 16, 18, 16, 10],
                     }
