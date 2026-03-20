@@ -1308,8 +1308,11 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 
             _ra_n_vals  = _seg_n_raw.reindex(_ra_top.index.astype(str)).fillna(0)
             _ra_n_vals.index = _ra_top.index
-            _ra_total_n = _ra_n_vals.sum()
-            _ra_w_lift  = float((_ra_top * _ra_n_vals).sum() / _ra_total_n) if _ra_total_n > 0 else np.nan
+            # Also count N for AND segments that have no lift data (absent from _ra_top)
+            _and_nodata_segs = [s for s in ra_and_segs if s not in _ra_top.index.astype(str)]
+            _and_extra_n = float(_seg_n_raw.reindex(_and_nodata_segs).fillna(0).sum()) if _and_nodata_segs else 0.0
+            _ra_total_n = float(_ra_n_vals.sum()) + _and_extra_n
+            _ra_w_lift  = float((_ra_top * _ra_n_vals).sum() / float(_ra_n_vals.sum())) if float(_ra_n_vals.sum()) > 0 else np.nan
             _ra_users   = int(_ra_total_n)
             _rm1, _rm2 = st.columns(2)
             _rm1.metric("Recommended audience", f"{_ra_users:,} customers")
@@ -2025,25 +2028,52 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             st.divider()
 
             # ── Per-segment detail table ──────────────────────────────────────
-            st.markdown("#### Per-segment breakdown")
+            _h_col, _t_col = st.columns([3, 1])
+            _h_col.markdown("#### Per-segment breakdown")
+            show_n_pct = _t_col.checkbox("N as % of column", value=False, key="show_n_pct_sim")
 
-            # Build columns: lift, CI, and N — interleaved per comm
-            _ci_suffix = "_lift_bal_ci" if sim_metric == "Balance % lift" else "_lift_acct_ci"
+            # Build columns: lift and N per comm (no CI)
             _intl_cols = []
             for c in ordered_comms:
                 if f"{c}{_lift_suffix}" in tbl.columns:
                     _intl_cols.append(f"{c}{_lift_suffix}")
-                if f"{c}{_ci_suffix}" in tbl.columns:
-                    _intl_cols.append(f"{c}{_ci_suffix}")
                 if f"{c}_n" in tbl.columns:
                     _intl_cols.append(f"{c}_n")
-            detail = tbl.loc[tbl.index.isin(_sim_segs_eff), [c for c in _intl_cols if c in tbl.columns]].copy()
-            detail.index.name = None  # avoids blank header row in _styled_html_table
+
+            # Include OR+AND (effective) AND NOT segments
+            _all_detail_segs = list(dict.fromkeys(list(_sim_segs_eff) + list(sim_segs_excl)))
+            detail = tbl.loc[tbl.index.isin(_all_detail_segs), [c for c in _intl_cols if c in tbl.columns]].copy()
+            detail.index.name = None
 
             col_rename_sim = {f"{c}{_lift_suffix}": c for c in ordered_comms}
-            col_rename_sim.update({f"{c}{_ci_suffix}": f"{c} CI±" for c in ordered_comms})
             col_rename_sim.update({f"{c}_n": f"{c} N" for c in ordered_comms})
             detail = detail.rename(columns=col_rename_sim)
+
+            # Role column
+            _sim_segs_and_set  = set(str(s) for s in (sim_segs_and  or []))
+            _sim_segs_excl_set = set(str(s) for s in (sim_segs_excl or []))
+            def _get_role(seg):
+                s = str(seg)
+                if s in _sim_segs_excl_set: return "NOT"
+                if s in _sim_segs_and_set:  return "AND"
+                return "OR"
+            detail.insert(0, "Role", [_get_role(s) for s in detail.index])
+
+            # Sort: AND → OR → NOT
+            _role_order = {"AND": 0, "OR": 1, "NOT": 2}
+            detail = detail.assign(_rs=detail["Role"].map(_role_order)).sort_values("_rs").drop(columns="_rs")
+
+            # N as proportion
+            n_disp_cols = [f"{c} N" for c in ordered_comms if f"{c} N" in detail.columns]
+            if show_n_pct:
+                for _nc in n_disp_cols:
+                    _ncsum = detail[_nc].sum()
+                    if _ncsum > 0:
+                        detail[_nc] = detail[_nc] / _ncsum
+                n_fmt = {_nc: lambda v, _: f"{v:.1%}" if pd.notna(v) else "" for _nc in n_disp_cols}
+                n_fmt = {_nc: (lambda v: f"{v:.1%}" if pd.notna(v) else "") for _nc in n_disp_cols}
+            else:
+                n_fmt = {_nc: "{:,.0f}" for _nc in n_disp_cols}
 
             def _pct_fmt_sim(v):
                 if pd.isna(v): return ""
@@ -2055,9 +2085,8 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                     return f"{pct:.2f}%" if s in ("1.0%", "-1.0%") else s
                 return f"{pct:.0f}%"
 
-            pct_fmt = {c: _pct_fmt_sim for c in ordered_comms if c in detail.columns}
-            pct_fmt.update({f"{c} CI±": _pct_fmt_sim for c in ordered_comms if f"{c} CI±" in detail.columns})
-            n_fmt   = {f"{c} N": "{:,.0f}" for c in ordered_comms if f"{c} N" in detail.columns}
+            lift_disp_cols = [c for c in ordered_comms if c in detail.columns]
+            pct_fmt = {c: _pct_fmt_sim for c in lift_disp_cols}
             fmt_all = {**pct_fmt, **n_fmt}
 
             def _lift_color(col_series):
@@ -2066,46 +2095,33 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             def _n_color_sim(col_series):
                 return col_series.map(_n_color)
 
-            lift_disp_cols = [c for c in ordered_comms if c in detail.columns]
-            ci_disp_cols   = [f"{c} CI±" for c in ordered_comms if f"{c} CI±" in detail.columns]
-            n_disp_cols    = [f"{c} N" for c in ordered_comms if f"{c} N" in detail.columns]
             styler_sim = detail.style.format(fmt_all, na_rep="")
             if lift_disp_cols:
                 styler_sim = styler_sim.apply(_lift_color, subset=lift_disp_cols, axis=0)
-            if n_disp_cols:
+            if not show_n_pct and n_disp_cols:
                 styler_sim = styler_sim.apply(_n_color_sim, subset=n_disp_cols, axis=0)
             _sim_h = max(300, min(600, 60 + len(detail) * 30))
-            _warn_ci_sim = [(c, f"{c} CI±") for c in ordered_comms
-                            if c in detail.columns and f"{c} CI±" in detail.columns]
             components.html(
-                _styled_html_table(styler_sim, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS,
-                                   height=_sim_h, warn_ci_pairs=_warn_ci_sim),
+                _styled_html_table(styler_sim, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_sim_h),
                 height=_sim_h, scrolling=True,
             )
 
-            # ── Excel export of selection ─────────────────────────────────────
-            _exp_rows = [
-                {
-                    "nsegment":    s,
-                    "label":       SEGMENT_LABELS.get(s, ""),
-                    "description": SEGMENT_DESCRIPTIONS.get(s, ""),
-                    "status":      "INCLUDED",
-                }
-                for s in _sim_segs_eff
-            ] + [
-                {
-                    "nsegment":    s,
-                    "label":       SEGMENT_LABELS.get(s, ""),
-                    "description": SEGMENT_DESCRIPTIONS.get(s, ""),
-                    "status":      "EXCLUDED",
-                }
-                for s in sim_segs_excl
-            ]
-            _exp_df = pd.DataFrame(_exp_rows, columns=["nsegment", "label", "description", "status"])
+            # ── Excel export — full breakdown table ───────────────────────────
+            _dl_detail = detail.copy()
+            if show_n_pct:
+                # Re-export with absolute N (not proportion) for clarity
+                for c in ordered_comms:
+                    _nc = f"{c} N"
+                    if _nc in _dl_detail.columns:
+                        _ncsum_raw = tbl.loc[tbl.index.isin(_all_detail_segs), f"{c}_n"].sum() if f"{c}_n" in tbl.columns else 0
+                        if _ncsum_raw > 0:
+                            _dl_detail[_nc] = _dl_detail[_nc] * _ncsum_raw
+            _dl_detail.insert(0, "Description", [SEGMENT_DESCRIPTIONS.get(str(s), "") for s in _dl_detail.index])
+            _dl_detail.insert(0, "Label", [SEGMENT_LABELS.get(str(s), "") for s in _dl_detail.index])
+            _dl_detail.index.name = "nsegment"
             _exp_buf = io.BytesIO()
             with pd.ExcelWriter(_exp_buf, engine="xlsxwriter") as _ew:
-                _exp_df.to_excel(_ew, sheet_name="Selection", index=False)
-                # Add summary sheet
+                _dl_detail.to_excel(_ew, sheet_name="Breakdown")
                 sim_summary.to_excel(_ew, sheet_name="Summary", index=False)
             _exp_buf.seek(0)
             st.markdown(
@@ -2120,7 +2136,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                 file_name="targeting_selection.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
-                help="Exports two sheets: 'Selection' (one row per segment with INCLUDED/EXCLUDED status) and 'Summary' (lift + projection per communication).",
+                help="Exports two sheets: 'Breakdown' (per-segment lift & N with Role) and 'Summary' (projected metrics per communication).",
             )
         elif st.session_state.get("sim_run_triggered") and not _sim_segs_eff:
             st.warning("No segments to analyse — all included segments are also in the exclude list. Remove some exclusions.")
