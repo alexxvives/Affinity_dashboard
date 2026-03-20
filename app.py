@@ -1263,15 +1263,30 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         if _ra_col in _tbl_ra.columns:
             _sorted_comm = _tbl_ra[_ra_col].dropna().sort_values(ascending=False)
 
-            # Per-segment unique-customer counts for this communication
+            # Per-segment unique-customer counts for this communication,
+            # filtered to only customers who also appear in ALL AND segments (if any set)
+            _ra_comm_df_all = df[(df["contact_flag"] == 1) & (df["communication"] == ra_comm)]
+            _and_idx_pre = [s for s in ra_and_segs if s in _sorted_comm.index.astype(str)]
+            if _and_idx_pre:
+                _and_str_pre = set(str(s) for s in _and_idx_pre)
+                _cust_seg_sets = (
+                    _ra_comm_df_all[_ra_comm_df_all["nsegment"].astype(str).isin(_and_str_pre)]
+                    .groupby("alpha_key")["nsegment"]
+                    .apply(lambda x: set(x.astype(str)))
+                )
+                _valid_and_custs = _cust_seg_sets[_cust_seg_sets.apply(lambda s: _and_str_pre.issubset(s))].index
+                _ra_comm_df_filt = _ra_comm_df_all[_ra_comm_df_all["alpha_key"].isin(_valid_and_custs)]
+            else:
+                _ra_comm_df_filt = _ra_comm_df_all
+
             _seg_n_raw = (
-                df[(df["contact_flag"] == 1) & (df["communication"] == ra_comm)]
+                _ra_comm_df_filt
                 .groupby("nsegment")["alpha_key"].nunique()
             )
             _seg_n_raw.index = _seg_n_raw.index.astype(str)
 
             # AND segments — hard constraints (must be present in the table)
-            _and_idx = [s for s in ra_and_segs if s in _sorted_comm.index.astype(str)]
+            _and_idx = _and_idx_pre
 
             # CI-aware sort: reliable segments (CI ≤ |lift|) get priority tier 1,
             # unreliable (CI crosses zero) get tier 2 — within each tier, still ranked by lift
@@ -1309,27 +1324,11 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
             _ra_n_vals  = _seg_n_raw.reindex(_ra_top.index.astype(str)).fillna(0)
             _ra_n_vals.index = _ra_top.index
             _ra_w_lift  = float((_ra_top * _ra_n_vals).sum() / float(_ra_n_vals.sum())) if float(_ra_n_vals.sum()) > 0 else np.nan
-            # Compute actual unique customers respecting AND intersection constraint
-            _ra_comm_df  = df[(df["contact_flag"] == 1) & (df["communication"] == ra_comm)]
-            _ra_top_str  = set(str(s) for s in _ra_top_idx)
-            if _and_idx:
-                _and_str = set(str(s) for s in _and_idx)
-                _cust_and = (
-                    _ra_comm_df[_ra_comm_df["nsegment"].astype(str).isin(_and_str)]
-                    .groupby("alpha_key")["nsegment"]
-                    .apply(lambda x: set(x.astype(str)))
-                )
-                _valid_and = _cust_and[_cust_and.apply(lambda s: _and_str.issubset(s))].index
-                _ra_users = int(
-                    _ra_comm_df[
-                        _ra_comm_df["alpha_key"].isin(_valid_and) &
-                        _ra_comm_df["nsegment"].astype(str).isin(_ra_top_str)
-                    ]["alpha_key"].nunique()
-                )
-            else:
-                _ra_users = int(
-                    _ra_comm_df[_ra_comm_df["nsegment"].astype(str).isin(_ra_top_str)]["alpha_key"].nunique()
-                )
+            # Unique customers in the recommended set, already AND-filtered via _seg_n_raw
+            _ra_top_str = set(str(s) for s in _ra_top_idx)
+            _ra_users   = int(
+                _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str).isin(_ra_top_str)]["alpha_key"].nunique()
+            )
             _rm1, _rm2 = st.columns(2)
             _rm1.metric("Recommended audience", f"{_ra_users:,} customers")
             _rm2.metric(f"Expected {ra_label}", f"{_ra_w_lift:.2%}" if pd.notna(_ra_w_lift) else "—")
