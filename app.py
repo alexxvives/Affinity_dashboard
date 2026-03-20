@@ -1255,7 +1255,7 @@ The lowest-lift segments from the non-selected remainder are shown separately as
             )
         with _ra_c4:
             ra_min_aud = st.number_input(
-                "Min audience", min_value=0, value=5000, step=500, key="ra_min_aud",
+                "Min audience", min_value=0, value=1000, step=500, key="ra_min_aud",
                 help="Add top-lift segments until the total reached audience is at least this size.",
             )
 
@@ -1320,49 +1320,115 @@ The lowest-lift segments from the non-selected remainder are shown separately as
             _sort_df = _sort_df.sort_values(['tier', 'lift'], ascending=[False, False])
 
             # Greedy top-lift selection until cumulative *unique* audience >= ra_min_aud
+            # Build _seg_custs_map as we go so NOT-pruning can reuse the sets
             _non_and = _sort_df[~_sort_df.index.isin(_and_idx)]
-            # Seed running set with AND-filtered customers already in AND segments
             _and_str_set = set(str(s) for s in _and_idx)
-            _running_custs: set = set(
-                _ra_comm_df_filt[
-                    _ra_comm_df_filt["nsegment"].astype(str).isin(_and_str_set)
-                ]["alpha_key"]
-            ) if _and_idx else set()
+            _seg_custs_map: dict = {}
+            for _s in _and_idx:
+                _seg_custs_map[str(_s)] = set(
+                    _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == str(_s)]["alpha_key"]
+                )
+            _running_custs: set = set().union(*[_seg_custs_map[str(s)] for s in _and_idx]) if _and_idx else set()
             _selected: List[str] = []
             for _seg in _non_and.index:
                 if len(_running_custs) >= ra_min_aud:
                     break
-                _seg_custs = set(
-                    _ra_comm_df_filt[
-                        _ra_comm_df_filt["nsegment"].astype(str) == str(_seg)
-                    ]["alpha_key"]
-                )
+                _s_str = str(_seg)
+                if _s_str not in _seg_custs_map:
+                    _seg_custs_map[_s_str] = set(
+                        _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == _s_str]["alpha_key"]
+                    )
                 _selected.append(_seg)
-                _running_custs |= _seg_custs
+                _running_custs |= _seg_custs_map[_s_str]
 
             _ra_top_idx = list(dict.fromkeys(_and_idx + _selected))
             _ra_top     = _sorted_comm.reindex(
                 [s for s in _ra_top_idx if s in _sorted_comm.index], tolerance=None
             ).dropna()
-            # Bottom: lowest-lift among the non-selected remainder
-            # Scale bottom count with top selection: ~half of top, min 3, max 15
-            _bot_n = max(3, min(15, len(_ra_top_idx) // 2))
-            _remainder  = _sort_df[~_sort_df.index.isin(_ra_top_idx)]
-            _ra_bot     = _remainder['lift'].sort_values(ascending=True).head(_bot_n)
 
+            # ── NOT-pruning pass ──────────────────────────────────────────────
+            # For each lowest-lift segment (from the non-selected remainder), check if
+            # removing the crossover customers (in both our audience AND that bad segment)
+            # improves the N-weighted average lift without shrinking audience below 80% of target.
+            _bot_n = max(3, min(15, len(_ra_top_idx) // 2))
+            _remainder_df = _sort_df[~_sort_df.index.isin(_ra_top_idx)].sort_values('lift')
+
+            # Ensure top-segment customer sets are cached
+            for _s in _ra_top.index:
+                _s_str = str(_s)
+                if _s_str not in _seg_custs_map:
+                    _seg_custs_map[_s_str] = set(
+                        _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == _s_str]["alpha_key"]
+                    )
+
+            def _weighted_lift(custs_set):
+                """N-weighted average lift over top segments, counting only customers in custs_set."""
+                _num = 0.0; _den = 0.0
+                for _s, _lv in _ra_top.items():
+                    if pd.isna(_lv): continue
+                    _n = len(_seg_custs_map.get(str(_s), set()) & custs_set)
+                    _num += _lv * _n; _den += _n
+                return _num / _den if _den > 0 else np.nan
+
+            _min_floor = max(1, int(ra_min_aud * 0.8))
+            _not_prune_segs: List[str] = []
+            _prune_custs = set(_running_custs)
+            _lift_after_top = _weighted_lift(_prune_custs)
+            _current_w_lift = _lift_after_top
+
+            for _b_seg in _remainder_df.index[: min(len(_remainder_df), _bot_n * 3)]:
+                _b_str = str(_b_seg)
+                if _b_str not in _seg_custs_map:
+                    _seg_custs_map[_b_str] = set(
+                        _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == _b_str]["alpha_key"]
+                    )
+                _crossover = _seg_custs_map[_b_str] & _prune_custs
+                if not _crossover:
+                    continue  # this segment has no members in our audience — NOT would be a no-op
+                _new_custs = _prune_custs - _crossover
+                if len(_new_custs) < _min_floor:
+                    continue  # would shrink audience too much
+                _new_lift = _weighted_lift(_new_custs)
+                if pd.notna(_new_lift) and (pd.isna(_current_w_lift) or _new_lift > _current_w_lift):
+                    _not_prune_segs.append(_b_str)
+                    _prune_custs = _new_custs
+                    _current_w_lift = _new_lift
+                if len(_not_prune_segs) >= _bot_n:
+                    break
+
+            # Apply pruning
+            if _not_prune_segs:
+                _running_custs = _prune_custs
+
+            # Bottom table: NOT-pruned segments first, padded with lowest-lift remainder
+            _not_prune_set = set(_not_prune_segs)
+            _remainder_fill = [s for s in _remainder_df.index if str(s) not in _not_prune_set]
+            _fill_needed = max(0, _bot_n - len(_not_prune_segs))
+            _bot_segs_ordered = _not_prune_segs + [str(s) for s in _remainder_fill[:_fill_needed]]
+            _ra_bot = _sort_df.loc[
+                [s for s in _bot_segs_ordered if s in _sort_df.index], 'lift'
+            ]
+
+            # Final metrics (after pruning)
             _ra_n_vals  = _seg_n_raw.reindex(_ra_top.index.astype(str)).fillna(0)
             _ra_n_vals.index = _ra_top.index
-            _ra_w_lift  = float((_ra_top * _ra_n_vals).sum() / float(_ra_n_vals.sum())) if float(_ra_n_vals.sum()) > 0 else np.nan
-            # Unique customers in the recommended set, already AND-filtered via _seg_n_raw
+            _ra_w_lift  = _weighted_lift(_running_custs)
             _ra_top_str = set(str(s) for s in _ra_top_idx)
-            _ra_users   = int(
-                _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str).isin(_ra_top_str)]["alpha_key"].nunique()
-            )
+            _ra_users   = len(_running_custs)
+
             # Total customers reachable given the AND constraint (ceiling for greedy loop)
             _and_pool_total = int(_ra_comm_df_filt["alpha_key"].nunique())
             _rm1, _rm2 = st.columns(2)
             _rm1.metric("Recommended audience", f"{_ra_users:,} customers")
             _rm2.metric(f"Expected {ra_label}", f"{_ra_w_lift:.2%}" if pd.notna(_ra_w_lift) else "—")
+            if _not_prune_segs:
+                _lift_gain = (_ra_w_lift - _lift_after_top) if pd.notna(_ra_w_lift) and pd.notna(_lift_after_top) else None
+                _gain_str = f" (+{_lift_gain:.2%} vs pre-pruning)" if _lift_gain else ""
+                st.caption(
+                    f"🔪 NOT-pruning removed {_ra_users - len(_running_custs - _running_custs):,} customers overlapping "
+                    f"{len(_not_prune_segs)} low-lift segment(s){_gain_str}. "
+                    f"These segments are sent as NOT exclusions to the Simulator."
+                )
             if _and_idx and _and_pool_total < ra_min_aud:
                 st.warning(
                     f"⚠️ The AND constraint limits the total available audience to **{_and_pool_total:,} customers** "
@@ -1481,13 +1547,20 @@ The lowest-lift segments from the non-selected remainder are shown separately as
             _ra_styler2   = _make_single_comm_table(_ra_top)
             _ra_bot_styler = _make_single_comm_table(_ra_bot)
             _ra_shown_segs = [str(s) for s in _ra_top.index]
-            _ra_bot_segs   = [str(s) for s in _ra_bot.index]
+            _ra_bot_segs   = _not_prune_segs if _not_prune_segs else [str(s) for s in _ra_bot.index]
+
+            _bot_lbl = (
+                f"Bottom {len(_ra_bot)} segments — {len(_not_prune_segs)} actively excluded (NOT), "
+                f"{len(_ra_bot) - len(_not_prune_segs)} lowest-lift reference"
+                if _not_prune_segs else
+                f"Bottom {len(_ra_bot)} segments (lowest lift — sent as NOT to Simulator)"
+            )
 
             _combined_h = max(300, min(900, 80 + (len(_ra_top) + len(_ra_bot)) * 30))
             components.html(
                 _two_tables_html([
                     (f"Top {len(_ra_top)} segments (highest lift)", _ra_styler2, [(ra_label, _ci_label)]),
-                    (f"Bottom {len(_ra_bot)} segments (lowest lift)", _ra_bot_styler, [(ra_label, _ci_label)]),
+                    (_bot_lbl, _ra_bot_styler, [(ra_label, _ci_label)]),
                 ], _combined_h),
                 height=_combined_h, scrolling=True,
             )
