@@ -1416,12 +1416,6 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                     _tbl_ra[_ra_ci_col].reindex(_naive_comm.index)
                     if _ra_ci_col in _tbl_ra.columns else pd.Series(np.nan, index=_naive_comm.index)
                 )
-                st.caption(
-                    f"✓ Ranking by **marginal OLS lift** (interaction model, HC1 SEs)  "
-                    f"— {int(_reg_df['marginal_lift'].notna().sum())} of "
-                    f"{len(_naive_comm)} segments estimated via regression; "
-                    f"remainder use naïve group-mean fallback."
-                )
             else:
                 _lift_vals = _naive_comm.copy()
                 _ci_vals   = (
