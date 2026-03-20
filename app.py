@@ -1064,19 +1064,21 @@ with st.sidebar:
     st.divider()
     with st.expander("Advanced settings", expanded=False):
         all_mode = False
-        # min_n caption
-        min_n = _MIN_N_DEFAULT
-        st.caption(
-            f"Segments with fewer than **{min_n}** treated customers are hidden "
-            f"(minimum for statistically meaningful lift estimates)."
+        min_n = st.slider(
+            "Min customers per segment",
+            min_value=0, max_value=200, value=_MIN_N_DEFAULT, step=5,
+            help="Segments with fewer treated customers than this threshold are hidden. Lower to see more segments with less data.",
         )
         st.markdown("---")
         bal_clip_pct = 5  # clip below 5th and above 95th percentile (hardcoded)
         st.caption("Outlier clipping: bottom and top 5% of balance changes are removed before aggregation.")
         st.markdown("---")
-        _BAL_BASELINE_MIN = 25
-        bal_baseline_min = float(_BAL_BASELINE_MIN)
-        st.caption(f"Low-balance filter: segments with avg starting balance < €{_BAL_BASELINE_MIN:,} are excluded from rankings.")
+        bal_baseline_min = st.number_input(
+            "Min avg start balance (€)",
+            min_value=0, max_value=10000, value=25, step=5,
+            help="Segments whose average starting balance is below this are excluded. Set to 0 to disable.",
+        )
+        bal_baseline_min = float(bal_baseline_min) if bal_baseline_min > 0 else None
 
     # Show columns — metric toggle lives inside the Data tab (see tab_table section)
     _show_bal       = True
@@ -1097,7 +1099,18 @@ df = preprocess(
 )
 
 # ── ordered_comms from session state (checkboxes live inside Table tab) ─────────
-_all_present_comms = [c for c in COMM_ORDER if c in df["communication"].unique()]
+# Accept all communications present in the data — not just those in COMM_ORDER.
+# Known comms are sorted by COMM_ORDER position; unknown ones are appended alphabetically.
+_known = [c for c in COMM_ORDER if c in df["communication"].unique()]
+_unknown = sorted([c for c in df["communication"].unique() if c not in COMM_ORDER and c])
+_all_present_comms = _known + _unknown
+if not _all_present_comms:
+    st.error(
+        "No communications found in the data. "
+        f"Communications seen: {sorted(df['communication'].unique().tolist())}. "
+        "Check that the 'communication' column is present and populated."
+    )
+    st.stop()
 ordered_comms = [c for c in _all_present_comms if st.session_state.get(f"cb_{c}", True)]
 if not ordered_comms:
     ordered_comms = _all_present_comms[:]
@@ -1248,7 +1261,18 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
         tbl = build_table(df, ordered_comms, all_mode, min_n, bal_baseline_min, _ver=2)
 
     if tbl.empty:
-        st.warning("No segments pass the current filters. Try adjusting filters in the sidebar.")
+        # Show diagnostic info so user knows exactly why nothing appears
+        _n_treated  = int(df[df["contact_flag"] == 1]["alpha_key"].nunique())
+        _n_ctrl     = int(df[df["control_flag"] == 1]["alpha_key"].nunique())
+        _comms_seen = sorted(df["communication"].unique().tolist())
+        _segs_seen  = int(df["nsegment"].nunique())
+        st.warning(
+            f"**No segments pass the current filters.**  \n"
+            f"Treated customers: **{_n_treated:,}** | Control customers: **{_n_ctrl:,}** | "
+            f"Segments in data: **{_segs_seen:,}** | Communications: **{', '.join(_comms_seen)}**  \n\n"
+            f"Try: lower *Min customers per segment* (currently {min_n}) → 0, "
+            f"or set *Min avg start balance* → 0, or widen the date range."
+        )
     else:
         html_tbl = style_tbl(
             tbl, ordered_comms,
