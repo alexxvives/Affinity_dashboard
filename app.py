@@ -1308,12 +1308,28 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 
             _ra_n_vals  = _seg_n_raw.reindex(_ra_top.index.astype(str)).fillna(0)
             _ra_n_vals.index = _ra_top.index
-            # Also count N for AND segments that have no lift data (absent from _ra_top)
-            _and_nodata_segs = [s for s in ra_and_segs if s not in _ra_top.index.astype(str)]
-            _and_extra_n = float(_seg_n_raw.reindex(_and_nodata_segs).fillna(0).sum()) if _and_nodata_segs else 0.0
-            _ra_total_n = float(_ra_n_vals.sum()) + _and_extra_n
             _ra_w_lift  = float((_ra_top * _ra_n_vals).sum() / float(_ra_n_vals.sum())) if float(_ra_n_vals.sum()) > 0 else np.nan
-            _ra_users   = int(_ra_total_n)
+            # Compute actual unique customers respecting AND intersection constraint
+            _ra_comm_df  = df[(df["contact_flag"] == 1) & (df["communication"] == ra_comm)]
+            _ra_top_str  = set(str(s) for s in _ra_top_idx)
+            if _and_idx:
+                _and_str = set(str(s) for s in _and_idx)
+                _cust_and = (
+                    _ra_comm_df[_ra_comm_df["nsegment"].astype(str).isin(_and_str)]
+                    .groupby("alpha_key")["nsegment"]
+                    .apply(lambda x: set(x.astype(str)))
+                )
+                _valid_and = _cust_and[_cust_and.apply(lambda s: _and_str.issubset(s))].index
+                _ra_users = int(
+                    _ra_comm_df[
+                        _ra_comm_df["alpha_key"].isin(_valid_and) &
+                        _ra_comm_df["nsegment"].astype(str).isin(_ra_top_str)
+                    ]["alpha_key"].nunique()
+                )
+            else:
+                _ra_users = int(
+                    _ra_comm_df[_ra_comm_df["nsegment"].astype(str).isin(_ra_top_str)]["alpha_key"].nunique()
+                )
             _rm1, _rm2 = st.columns(2)
             _rm1.metric("Recommended audience", f"{_ra_users:,} customers")
             _rm2.metric(f"Expected {ra_label}", f"{_ra_w_lift:.2%}" if pd.notna(_ra_w_lift) else "—")
@@ -1889,10 +1905,6 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             and s not in sim_segs_excl
         ]
 
-        # Reset trigger if the segment selection has changed since the last run
-        if _sim_segs_eff != st.session_state.get("_sim_segs_snapshot"):
-            st.session_state["sim_run_triggered"] = False
-
         if st.button("▶ Run simulation", key="sim_run_btn", type="primary"):
             st.session_state["sim_run_triggered"] = True
             st.session_state["_sim_segs_snapshot"] = list(_sim_segs_eff)
@@ -2030,7 +2042,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             # ── Per-segment detail table ──────────────────────────────────────
             _h_col, _t_col = st.columns([3, 1])
             _h_col.markdown("#### Per-segment breakdown")
-            show_n_pct = _t_col.checkbox("N as % of column", value=False, key="show_n_pct_sim")
+            show_n_pct = _t_col.checkbox("Replace N with proportion", value=False, key="show_n_pct_sim")
 
             # Build columns: lift and N per comm (no CI)
             _intl_cols = []
@@ -2040,12 +2052,15 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                 if f"{c}_n" in tbl.columns:
                     _intl_cols.append(f"{c}_n")
 
-            # Include OR+AND (effective) AND NOT segments
-            _all_detail_segs = list(dict.fromkeys(list(_sim_segs_eff) + list(sim_segs_excl)))
+            # Include all segments: OR (sim_segs), AND (sim_segs_and), NOT (sim_segs_excl)
+            _all_detail_segs = list(dict.fromkeys(
+                list(sim_segs or []) + list(sim_segs_and or []) + list(sim_segs_excl or [])
+            ))
             detail = tbl.loc[tbl.index.isin(_all_detail_segs), [c for c in _intl_cols if c in tbl.columns]].copy()
             detail.index.name = None
 
-            col_rename_sim = {f"{c}{_lift_suffix}": c for c in ordered_comms}
+            _metric_lbl = " Bal%" if sim_metric == "Balance % lift" else " Acct%"
+            col_rename_sim = {f"{c}{_lift_suffix}": f"{c}{_metric_lbl}" for c in ordered_comms}
             col_rename_sim.update({f"{c}_n": f"{c} N" for c in ordered_comms})
             detail = detail.rename(columns=col_rename_sim)
 
@@ -2070,7 +2085,6 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                     _ncsum = detail[_nc].sum()
                     if _ncsum > 0:
                         detail[_nc] = detail[_nc] / _ncsum
-                n_fmt = {_nc: lambda v, _: f"{v:.1%}" if pd.notna(v) else "" for _nc in n_disp_cols}
                 n_fmt = {_nc: (lambda v: f"{v:.1%}" if pd.notna(v) else "") for _nc in n_disp_cols}
             else:
                 n_fmt = {_nc: "{:,.0f}" for _nc in n_disp_cols}
@@ -2085,7 +2099,7 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
                     return f"{pct:.2f}%" if s in ("1.0%", "-1.0%") else s
                 return f"{pct:.0f}%"
 
-            lift_disp_cols = [c for c in ordered_comms if c in detail.columns]
+            lift_disp_cols = [f"{c}{_metric_lbl}" for c in ordered_comms if f"{c}{_metric_lbl}" in detail.columns]
             pct_fmt = {c: _pct_fmt_sim for c in lift_disp_cols}
             fmt_all = {**pct_fmt, **n_fmt}
 
@@ -2095,11 +2109,17 @@ A lift of 10% on an average of 1.2 accounts per user ≈ 0.12 new accounts per u
             def _n_color_sim(col_series):
                 return col_series.map(_n_color)
 
+            def _role_color(v):
+                if v == "NOT": return "background-color: #ffdddd; color: #880000"
+                if v == "AND": return "background-color: #e8d5ff; color: #5500aa"
+                if v == "OR":  return "background-color: #d0e8ff; color: #003399"
+                return ""
             styler_sim = detail.style.format(fmt_all, na_rep="")
             if lift_disp_cols:
                 styler_sim = styler_sim.apply(_lift_color, subset=lift_disp_cols, axis=0)
-            if not show_n_pct and n_disp_cols:
+            if n_disp_cols:
                 styler_sim = styler_sim.apply(_n_color_sim, subset=n_disp_cols, axis=0)
+            styler_sim = styler_sim.apply(lambda s: s.map(_role_color), subset=["Role"], axis=0)
             _sim_h = max(300, min(600, 60 + len(detail) * 30))
             components.html(
                 _styled_html_table(styler_sim, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_sim_h),
