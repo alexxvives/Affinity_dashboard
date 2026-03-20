@@ -1760,6 +1760,13 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 st.session_state["sim_run_triggered"] = True
                 _and_note = f", {len(_and_idx)} mandatory AND" if _and_idx else ""
                 st.success(f"Sent {len(_ra_shown_segs)} segment{'s' if len(_ra_shown_segs) != 1 else ''} to the Audience Simulator{_and_note} (+ {len(_ra_bot_segs)} excluded).")
+                # Switch to the Simulator tab (index 2) via JS click
+                components.html(
+                    "<script>"
+                    "window.parent.document.querySelectorAll('[data-baseweb=\"tab\"]')[2].click();"
+                    "</script>",
+                    height=0,
+                )
 
         # ── Segment Combo Explorer ────────────────────────────────────────────
         st.divider()
