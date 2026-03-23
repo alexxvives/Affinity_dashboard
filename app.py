@@ -2289,6 +2289,25 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                     )
                     _pk5.metric("Median SoW", f"{_aud['sow'].median() * 100:.0f}%")
 
+                    import plotly.graph_objects as go
+                    from scipy.stats import gaussian_kde as _gkde
+
+                    def _kde_trace(series, nbins, bar_color, line_color):
+                        """Return a KDE Scatter trace scaled to match a histogram's bar heights."""
+                        _v = series.dropna().values
+                        if len(_v) < 5:
+                            return None
+                        _, _edges = np.histogram(_v, bins=nbins)
+                        _bw = _edges[1] - _edges[0]
+                        _fn = _gkde(_v)
+                        _xs = np.linspace(_v.min(), _v.max(), 300)
+                        _ys = _fn(_xs) * len(_v) * _bw
+                        return go.Scatter(
+                            x=_xs, y=_ys, mode="lines",
+                            line=dict(color=line_color, width=2.5),
+                            showlegend=False, name="",
+                        )
+
                     st.markdown("<br>", unsafe_allow_html=True)
 
                     # ── Row 1: Age distribution + Gender ─────────────────────
@@ -2311,22 +2330,36 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             title="Age Distribution",
                             color="Customers", color_continuous_scale="Blues",
                         )
+                        _fig_age.add_scatter(
+                            x=_age_dist["Age group"], y=_age_dist["Customers"],
+                            mode="lines+markers",
+                            line=dict(color="#103060", width=2, shape="spline", smoothing=1.0),
+                            marker=dict(size=6, color="#103060"),
+                            showlegend=False, name="",
+                        )
                         _fig_age.update_layout(
                             height=300, margin=dict(l=20, r=20, t=50, b=30),
                             coloraxis_showscale=False, showlegend=False,
                         )
                         st.plotly_chart(_fig_age, use_container_width=True)
                     with _ac2:
-                        _gender_counts = _aud["gender"].value_counts().reset_index()
+                        _gender_vals = _aud["gender"].fillna("Missing")
+                        _gender_counts = _gender_vals.value_counts().reset_index()
                         _gender_counts.columns = ["Gender", "Count"]
-                        _fig_gender = px.pie(
-                            _gender_counts, values="Count", names="Gender",
-                            title="Gender", hole=0.4,
-                            color_discrete_sequence=px.colors.qualitative.Pastel,
-                        )
+                        _g_cmap = {"Male": "#89C4E1", "Female": "#FFB7C5", "Missing": "#CCCCCC"}
+                        _g_colors = [_g_cmap.get(g, "#DDDDDD") for g in _gender_counts["Gender"]]
+                        _fig_gender = go.Figure(go.Pie(
+                            labels=_gender_counts["Gender"],
+                            values=_gender_counts["Count"],
+                            hole=0.4,
+                            marker=dict(colors=_g_colors),
+                            textinfo="percent+label",
+                        ))
                         _fig_gender.update_layout(
+                            title=dict(text="Gender"),
                             height=300, margin=dict(l=20, r=20, t=50, b=30),
                             legend=dict(orientation="v", yanchor="middle", y=0.5),
+                            showlegend=True,
                         )
                         st.plotly_chart(_fig_gender, use_container_width=True)
 
@@ -2341,6 +2374,9 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             labels={"tenure_years": "Tenure (years)"},
                             color_discrete_sequence=["#4C9BE8"],
                         )
+                        _kde_ten = _kde_trace(_aud["tenure_years"], 20, "#4C9BE8", "#1a3a6b")
+                        if _kde_ten:
+                            _fig_ten.add_trace(_kde_ten)
                         _fig_ten.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
                         st.plotly_chart(_fig_ten, use_container_width=True)
                     with _ac4:
@@ -2350,6 +2386,9 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             labels={"amount_deposit_spot_balance": "Balance ($)"},
                             color_discrete_sequence=["#F4A261"],
                         )
+                        _kde_dep = _kde_trace(_aud["amount_deposit_spot_balance"], 25, "#F4A261", "#7a3100")
+                        if _kde_dep:
+                            _fig_dep.add_trace(_kde_dep)
                         _fig_dep.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
                         st.plotly_chart(_fig_dep, use_container_width=True)
                     with _ac5:
@@ -2359,6 +2398,9 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             labels={"sow": "SoW"},
                             color_discrete_sequence=["#68B984"],
                         )
+                        _kde_sow = _kde_trace(_aud["sow"], 20, "#68B984", "#1a4d2e")
+                        if _kde_sow:
+                            _fig_sow.add_trace(_kde_sow)
                         _fig_sow.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
                         st.plotly_chart(_fig_sow, use_container_width=True)
 
@@ -2393,6 +2435,13 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             _nprod_cnt, x="Products", y="Customers",
                             title="# Products Held",
                             color="Customers", color_continuous_scale="YlOrRd",
+                        )
+                        _fig_np.add_scatter(
+                            x=_nprod_cnt["Products"], y=_nprod_cnt["Customers"],
+                            mode="lines+markers",
+                            line=dict(color="#5a0000", width=2, shape="spline", smoothing=0.8),
+                            marker=dict(size=6, color="#5a0000"),
+                            showlegend=False, name="",
                         )
                         _fig_np.update_layout(
                             height=340, margin=dict(l=20, r=20, t=50, b=30),

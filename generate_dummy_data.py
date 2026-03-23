@@ -195,7 +195,10 @@ def generate_audience_profile_data(n_users: int = 5000, seed: int = 42) -> pd.Da
     active_base_prob = np.clip(0.80 - 0.004 * (age_years - 35), 0.30, 0.92)
     flag_active = (rng.random(n_users) < active_base_prob).astype(int)
 
-    genders = rng.choice(["Male", "Female", "Non-binary"], size=n_users, p=[0.48, 0.49, 0.03])
+    _gender_raw = rng.choice(["Male", "Female"], size=n_users, p=[0.49, 0.51])
+    # ~6 % missing gender — realistic for real data
+    _gender_missing_mask = rng.random(n_users) < 0.06
+    genders = np.where(_gender_missing_mask, None, _gender_raw)
 
     state_probs = np.array(_STATE_WEIGHTS, dtype=float)
     state_probs /= state_probs.sum()
