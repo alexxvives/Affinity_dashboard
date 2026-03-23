@@ -2261,17 +2261,19 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
             # ── Audience Profile ──────────────────────────────────────────────────────
             st.markdown("---")
             st.markdown("#### Audience Profile")
-            st.caption(
-                f"Demographics of the {len(_sim_segs_eff):,} segment(s) in this audience.  "
-                "Data sourced from `audience_profile.csv`."
-            )
             if _aud_df is None:
                 st.info(
                     "No audience profile data found. "
                     "Run `python generate_dummy_data.py` to generate `audience_profile.csv`."
                 )
             else:
-                _aud_keys = df.loc[df["nsegment"].isin(_sim_segs_eff), "alpha_key"].unique()
+                # Resolve final user set: users in the selected (OR+AND) segments minus NOT
+                _aud_or_keys = df.loc[df["nsegment"].isin(_compute_segs), "alpha_key"]
+                if _compute_excl:
+                    _aud_excl_keys = set(df.loc[df["nsegment"].isin(_compute_excl), "alpha_key"])
+                    _aud_keys = _aud_or_keys[~_aud_or_keys.isin(_aud_excl_keys)].unique()
+                else:
+                    _aud_keys = _aud_or_keys.unique()
                 _aud = _aud_df[_aud_df["alpha_key"].isin(_aud_keys)].copy()
                 if len(_aud) == 0:
                     st.info("No demographic records found for the selected segments.")
@@ -2286,6 +2288,8 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                         f"{_aud['flag_last90_active_mob_rob'].mean() * 100:.0f}%",
                     )
                     _pk5.metric("Median SoW", f"{_aud['sow'].median() * 100:.0f}%")
+
+                    st.markdown("<br>", unsafe_allow_html=True)
 
                     # ── Row 1: Age distribution + Gender ─────────────────────
                     _ac1, _ac2 = st.columns([3, 2])
@@ -2308,7 +2312,7 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             color="Customers", color_continuous_scale="Blues",
                         )
                         _fig_age.update_layout(
-                            height=280, margin=dict(l=20, r=20, t=40, b=20),
+                            height=300, margin=dict(l=20, r=20, t=50, b=30),
                             coloraxis_showscale=False, showlegend=False,
                         )
                         st.plotly_chart(_fig_age, use_container_width=True)
@@ -2321,13 +2325,15 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             color_discrete_sequence=px.colors.qualitative.Pastel,
                         )
                         _fig_gender.update_layout(
-                            height=280, margin=dict(l=20, r=20, t=40, b=20),
+                            height=300, margin=dict(l=20, r=20, t=50, b=30),
                             legend=dict(orientation="v", yanchor="middle", y=0.5),
                         )
                         st.plotly_chart(_fig_gender, use_container_width=True)
 
-                    # ── Row 2: Tenure + Share of Wallet ──────────────────────
-                    _ac3, _ac4 = st.columns(2)
+                    st.markdown("<br>", unsafe_allow_html=True)
+
+                    # ── Row 2: Tenure + Deposit Balance + Share of Wallet ─────
+                    _ac3, _ac4, _ac5 = st.columns(3)
                     with _ac3:
                         _fig_ten = px.histogram(
                             _aud, x="tenure_years", nbins=20,
@@ -2335,21 +2341,32 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             labels={"tenure_years": "Tenure (years)"},
                             color_discrete_sequence=["#4C9BE8"],
                         )
-                        _fig_ten.update_layout(height=260, margin=dict(l=20, r=20, t=40, b=20))
+                        _fig_ten.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
                         st.plotly_chart(_fig_ten, use_container_width=True)
                     with _ac4:
+                        _fig_dep = px.histogram(
+                            _aud, x="amount_deposit_spot_balance", nbins=25,
+                            title="Deposit Balance",
+                            labels={"amount_deposit_spot_balance": "Balance ($)"},
+                            color_discrete_sequence=["#F4A261"],
+                        )
+                        _fig_dep.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
+                        st.plotly_chart(_fig_dep, use_container_width=True)
+                    with _ac5:
                         _fig_sow = px.histogram(
                             _aud, x="sow", nbins=20,
                             title="Share of Wallet  (deposit ÷ net worth)",
                             labels={"sow": "SoW"},
                             color_discrete_sequence=["#68B984"],
                         )
-                        _fig_sow.update_layout(height=260, margin=dict(l=20, r=20, t=40, b=20))
+                        _fig_sow.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
                         st.plotly_chart(_fig_sow, use_container_width=True)
 
+                    st.markdown("<br>", unsafe_allow_html=True)
+
                     # ── Row 3: Top states + # products held ──────────────────
-                    _ac5, _ac6 = st.columns(2)
-                    with _ac5:
+                    _ac6, _ac7 = st.columns(2)
+                    with _ac6:
                         _state_cnt = (
                             _aud["state"].value_counts().head(10)
                             .reset_index()
@@ -2361,12 +2378,12 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             color="Customers", color_continuous_scale="Teal",
                         )
                         _fig_state.update_layout(
-                            height=320, margin=dict(l=20, r=20, t=40, b=20),
+                            height=340, margin=dict(l=20, r=20, t=50, b=30),
                             coloraxis_showscale=False,
                             yaxis=dict(categoryorder="total ascending"),
                         )
                         st.plotly_chart(_fig_state, use_container_width=True)
-                    with _ac6:
+                    with _ac7:
                         _nprod_cnt = (
                             _aud["n_products"].value_counts().sort_index()
                             .reset_index()
@@ -2378,10 +2395,12 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             color="Customers", color_continuous_scale="YlOrRd",
                         )
                         _fig_np.update_layout(
-                            height=320, margin=dict(l=20, r=20, t=40, b=20),
+                            height=340, margin=dict(l=20, r=20, t=50, b=30),
                             coloraxis_showscale=False,
                         )
                         st.plotly_chart(_fig_np, use_container_width=True)
+
+                    st.markdown("<br>", unsafe_allow_html=True)
 
                     # ── Row 4: Product ownership rates (full width) ───────────
                     _prod_cols_present = [c for c in PRODUCT_COLS if c in _aud.columns]
