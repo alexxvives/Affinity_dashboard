@@ -91,7 +91,7 @@ def _load_csv(b: bytes) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
-def preprocess(df_raw: pd.DataFrame, date_min: Optional[str], date_max: Optional[str], recency_decay: float, bal_clip_pct: float = 0.0) -> pd.DataFrame:
+def preprocess(df_raw: pd.DataFrame, date_min: Optional[str], date_max: Optional[str], bal_clip_pct: float = 0.0) -> pd.DataFrame:
     df = df_raw.copy()
     df.columns = df.columns.str.lower().str.strip()  # normalise: Communication→communication, Contact_flag→contact_flag
     df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
@@ -135,14 +135,6 @@ def preprocess(df_raw: pd.DataFrame, date_min: Optional[str], date_max: Optional
         hi = df["balance_pct_change"].quantile(1.0 - bal_clip_pct / 100.0)
         df["balance_pct_change"] = df["balance_pct_change"].clip(lo, hi)
 
-    # Recency weights: exponential decay from newest observation
-    if recency_decay > 0 and df["start_date"].notna().any():
-        ref = df["start_date"].max()
-        age_days = (ref - df["start_date"]).dt.days.fillna(0).clip(lower=0)
-        df["_weight"] = np.exp(-recency_decay * age_days / 365.0)
-    else:
-        df["_weight"] = 1.0
-
     return df
 
 
@@ -151,40 +143,6 @@ def _rank(c: str) -> int:
         return COMM_ORDER.index(c)
     except ValueError:
         return 999
-
-
-def _wmean(vals: pd.Series, weights: pd.Series) -> float:
-    mask = vals.notna()
-    v, w = vals[mask], weights[mask]
-    if w.sum() == 0:
-        return np.nan
-    return float(np.average(v, weights=w))
-
-
-def _ci95(vals: pd.Series, weights: pd.Series) -> float:
-    """Half-width of 95% CI using weighted standard error × 1.96."""
-    mask = vals.notna()
-    v = vals[mask].to_numpy(dtype=float)
-    w = weights[mask].to_numpy(dtype=float)
-    n = len(v)
-    if n < 2 or w.sum() == 0:
-        return np.nan
-    wm = float(np.average(v, weights=w))
-    wvar = float(np.average((v - wm) ** 2, weights=w)) * n / (n - 1)
-    return float(Z95 * np.sqrt(wvar / n))
-
-
-def _se(vals: pd.Series, weights: pd.Series) -> float:
-    """Weighted standard error of the mean (= ci95 / Z95)."""
-    mask = vals.notna()
-    v = vals[mask].to_numpy(dtype=float)
-    w = weights[mask].to_numpy(dtype=float)
-    n = len(v)
-    if n < 2 or w.sum() == 0:
-        return np.nan
-    wm = float(np.average(v, weights=w))
-    wvar = float(np.average((v - wm) ** 2, weights=w)) * n / (n - 1)
-    return float(np.sqrt(wvar / n))
 
 
 @st.cache_data(show_spinner=False)
@@ -355,115 +313,6 @@ _MIN_N_DEFAULT = 30
 
 
 @st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
-def marginal_lift_regression(df: pd.DataFrame, comm: str, outcome_col: str) -> pd.DataFrame:
-    """Compute per-segment *marginal* lift via sparse OLS with segment-interaction terms.
-
-    Model (fits on all treated + control users for this communication):
-        outcome = α + β·treated + Σ_s δ_s·seg_s + Σ_s γ_s·(treated × seg_s) + ε
-
-    The γ_s interactions are the marginal lifts: how much segment membership boosts
-    the treatment effect *controlling for every other segment the user belongs to*.
-    Users in multiple segments are counted exactly once; each segment's coefficient
-    reflects only its independent contribution.
-
-    Standard errors use the HC1 sandwich estimator (heteroscedasticity-robust).
-
-    Returns a DataFrame indexed by segment ID with columns:
-        marginal_lift      – γ_s (same units as outcome_col, e.g. fractional pct change)
-        marginal_lift_ci   – Z95 × HC1 SE  (half-width of 95% CI)
-
-    Returns empty DataFrame if there is insufficient data (< 100 users or < 2 segments).
-
-    Performance at 800 segments / 1M users:
-        Design matrix is sparse (~4M non-zeros).  X'X is 1602×1602 — trivial to invert.
-        Typical wall-clock: 2–8 s, cached by Streamlit thereafter.
-    """
-    import scipy.sparse as sp
-
-    sub = df[df["communication"] == comm]
-    sub_valid = sub[sub[outcome_col].notna()]
-
-    # One row per user (outcome is identical across all exploded segment rows for a given user)
-    cands = sub_valid[sub_valid["contact_flag"].isin([0, 1])].drop_duplicates("alpha_key")
-    t_mask = cands["contact_flag"] == 1
-    c_mask = cands["control_flag"] == 1
-    user_df = cands[t_mask | c_mask].reset_index(drop=True)
-
-    n_users = len(user_df)
-    if n_users < 100:
-        return pd.DataFrame(columns=["marginal_lift", "marginal_lift_ci"])
-
-    user2row: dict = {u: i for i, u in enumerate(user_df["alpha_key"])}
-
-    # Segment memberships from the full exploded df for these users
-    seg_rows = (
-        sub[sub["alpha_key"].isin(user2row) & (sub["nsegment"] != "__NO_SEGMENT__")]
-        [["alpha_key", "nsegment"]]
-        .drop_duplicates()
-    )
-    segs = sorted(seg_rows["nsegment"].unique().tolist())
-    n_segs = len(segs)
-    if n_segs < 2:
-        return pd.DataFrame(columns=["marginal_lift", "marginal_lift_ci"])
-
-    seg2col: dict = {s: i for i, s in enumerate(segs)}
-
-    # Sparse segment-membership matrix  S: n_users × n_segs
-    seg_rows_filt = seg_rows[seg_rows["alpha_key"].isin(user2row)]
-    row_ids = [user2row[u] for u in seg_rows_filt["alpha_key"]]
-    col_ids = [seg2col[s] for s in seg_rows_filt["nsegment"]]
-    S = sp.csr_matrix(
-        (np.ones(len(row_ids), dtype=np.float32), (row_ids, col_ids)),
-        shape=(n_users, n_segs),
-    )
-
-    treated = (user_df["contact_flag"].values == 1).astype(np.float32)
-    y = user_df[outcome_col].values.astype(np.float64)
-
-    # Design matrix X: [intercept | treated | S | treated⊙S]   shape: n_users × (2 + 2·n_segs)
-    ones  = sp.csr_matrix(np.ones((n_users, 1), dtype=np.float32))
-    t_col = sp.csr_matrix(treated.reshape(-1, 1))
-    t_S   = sp.diags(treated).dot(S)          # rows of S zeroed for control customers
-    X     = sp.hstack([ones, t_col, S, t_S], format="csr")
-
-    # Normal equations with tiny ridge regularisation for numerical stability
-    XtX = (X.T @ X).toarray().astype(np.float64)
-    Xty = np.asarray(X.T @ y).ravel().astype(np.float64)
-    n_feat = XtX.shape[0]
-    ridge_lam = 1e-6 * n_users           # scale-invariant; negligible at n_users ≥ 100
-    XtX[np.diag_indices_from(XtX)] += ridge_lam
-
-    try:
-        coef = np.linalg.solve(XtX, Xty)
-    except np.linalg.LinAlgError:
-        return pd.DataFrame(columns=["marginal_lift", "marginal_lift_ci"])
-
-    # HC1 sandwich standard errors
-    residuals = y - np.asarray(X @ coef).ravel()
-    n, k = n_users, n_feat
-    scale_hc1 = n / max(n - k, 1)
-    X_scaled = X.multiply(np.sqrt(residuals ** 2 * scale_hc1).reshape(-1, 1))
-    meat = (X_scaled.T @ X_scaled).toarray().astype(np.float64)
-    try:
-        H = np.linalg.inv(XtX)
-    except np.linalg.LinAlgError:
-        return pd.DataFrame(columns=["marginal_lift", "marginal_lift_ci"])
-    V  = H @ meat @ H
-    se = np.sqrt(np.maximum(np.diag(V), 0.0))
-
-    # γ_s: interaction coefficients at positions [2+n_segs : 2+2·n_segs]
-    gamma    = coef[2 + n_segs:]
-    gamma_se = se[2 + n_segs:]
-
-    result = pd.DataFrame(
-        {"marginal_lift": gamma, "marginal_lift_ci": Z95 * gamma_se},
-        index=segs,
-    )
-    result.index.name = "nsegment"
-    return result
-
-
-@st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
 def build_table(
     df: pd.DataFrame,
     ordered_comms: List[str],
@@ -588,19 +437,7 @@ def style_tbl(
                 and v in disp.columns]
     n_cols = [v for k, v in rename.items() if (k.endswith("_n") or k == "agg_n") and v in disp.columns]
 
-    def _pct_fmt(v):
-        if pd.isna(v):
-            return ""
-        pct = v * 100
-        if abs(pct) < 0.1:
-            return f"{pct:.2f}%"
-        if abs(pct) < 1.0:
-            s = f"{pct:.1f}%"
-            # guard: rounding can push e.g. 0.96% → "1.0%"; use 2dp instead
-            return f"{pct:.2f}%" if s in ("1.0%", "-1.0%") else s
-        return f"{pct:.0f}%"
-
-    fmt = {col: _pct_fmt for col in pct_cols if col in disp.columns}
+    fmt = {col: _fmt_pct for col in pct_cols if col in disp.columns}
     fmt.update({col: "{:,.0f}" for col in n_cols if col in disp.columns})
 
     def _colour_col(col_series: pd.Series) -> pd.Series:
@@ -616,16 +453,6 @@ def style_tbl(
             ci_v   = rename.get(ci_key, "")
             if ci_v in disp.columns:
                 lift_ci_map[v] = ci_v
-
-    # Build per-row warning lookup: set of (row_position, lift_col_name) where CI > |lift|
-    _warn_cells: set = set()
-    if show_lift and lift_ci_map:
-        for lc, cc in lift_ci_map.items():
-            for i in range(len(disp)):
-                lv = disp[lc].iat[i]
-                cv = disp[cc].iat[i]
-                if not pd.isna(lv) and not pd.isna(cv) and abs(cv) > abs(lv):
-                    _warn_cells.add((i, lc))
 
     plain_colour_cols = [v for k, v in rename.items()
                          if (k.endswith("_bal") or k.endswith("_acct")
@@ -644,31 +471,8 @@ def style_tbl(
 
     table_html = styler.to_html()
 
-    # Inject ⚠️ into lift cells where CI crosses zero
-    if _warn_cells:
-        import re as _re_warn
-        _col_names = list(disp.columns)
-        _lift_col_positions = {}
-        for lc in lift_ci_map:
-            if lc in _col_names:
-                _lift_col_positions[lc] = _col_names.index(lc)
-        if _lift_col_positions:
-            _tbody_parts = table_html.split("<tbody>", 1)
-            if len(_tbody_parts) == 2:
-                _rows = _tbody_parts[1].split("</tr>")
-                _row_idx = 0
-                for ri in range(len(_rows)):
-                    if "<tr" not in _rows[ri]:
-                        continue
-                    tds = list(_re_warn.finditer(r'(<td[^>]*>)(.*?)(</td>)', _rows[ri]))
-                    for lc, col_pos in _lift_col_positions.items():
-                        if (_row_idx, lc) in _warn_cells and col_pos < len(tds):
-                            m = tds[col_pos]
-                            old = m.group(0)
-                            new = f'{m.group(1)}{m.group(2)} ⚠️{m.group(3)}'
-                            _rows[ri] = _rows[ri].replace(old, new, 1)
-                    _row_idx += 1
-                table_html = _tbody_parts[0] + "<tbody>" + "</tr>".join(_rows)
+    if show_lift and lift_ci_map:
+        table_html = _inject_warn_flags(table_html, disp, list(lift_ci_map.items()))
 
     # Inject description tooltips on row-index cells
     if seg_labels or seg_desc:
@@ -769,6 +573,51 @@ def _n_color(val: object) -> str:
         return ""
 
 
+def _fmt_pct(v, na_str: str = "") -> str:
+    """Format a fractional value (e.g. 0.05) as a readable % string."""
+    if pd.isna(v):
+        return na_str
+    pct = v * 100
+    if abs(pct) < 0.1:
+        return f"{pct:.2f}%"
+    if abs(pct) < 1.0:
+        s = f"{pct:.1f}%"
+        # guard: rounding can push 0.96% → "1.0%"; use 2dp instead
+        return f"{pct:.2f}%" if s in ("1.0%", "-1.0%") else s
+    return f"{pct:.0f}%"
+
+
+def _inject_warn_flags(html: str, df: pd.DataFrame, warn_pairs: List[Tuple[str, str]]) -> str:
+    """Inject ⚠️ into HTML table cells where CI > |lift| (statistically unreliable)."""
+    import re as _re
+    warn_cells: set = set()
+    for lc, cc in warn_pairs:
+        if lc in df.columns and cc in df.columns:
+            for i in range(len(df)):
+                lv, cv = df[lc].iat[i], df[cc].iat[i]
+                if pd.notna(lv) and pd.notna(cv) and abs(cv) > abs(lv):
+                    warn_cells.add((i, lc))
+    if not warn_cells:
+        return html
+    col_names = list(df.columns)
+    lift_positions = {lc: col_names.index(lc) for lc, _ in warn_pairs if lc in col_names}
+    parts = html.split("<tbody>", 1)
+    if len(parts) != 2:
+        return html
+    rows = parts[1].split("</tr>")
+    row_idx = 0
+    for ri in range(len(rows)):
+        if "<tr" not in rows[ri]:
+            continue
+        tds = list(_re.finditer(r'(<td[^>]*>)(.*?)(</td>)', rows[ri]))
+        for lc, col_pos in lift_positions.items():
+            if (row_idx, lc) in warn_cells and col_pos < len(tds):
+                m = tds[col_pos]
+                rows[ri] = rows[ri].replace(m.group(0), f'{m.group(1)}{m.group(2)} ⚠️{m.group(3)}', 1)
+        row_idx += 1
+    return parts[0] + "<tbody>" + "</tr>".join(rows)
+
+
 def _styled_html_table(
     styler,
     seg_labels: Optional[Dict[str, str]] = None,
@@ -781,34 +630,7 @@ def _styled_html_table(
     html = styler.to_html()
     # Inject ⚠️ on lift cells where CI > |lift| (statistically unreliable)
     if warn_ci_pairs:
-        _df_w = styler.data
-        _warn_cells_w: set = set()
-        for _lc_w, _cc_w in warn_ci_pairs:
-            if _lc_w in _df_w.columns and _cc_w in _df_w.columns:
-                for _i_w in range(len(_df_w)):
-                    _lv_w = _df_w[_lc_w].iat[_i_w]
-                    _cv_w = _df_w[_cc_w].iat[_i_w]
-                    if pd.notna(_lv_w) and pd.notna(_cv_w) and abs(_cv_w) > abs(_lv_w):
-                        _warn_cells_w.add((_i_w, _lc_w))
-        if _warn_cells_w:
-            _col_names_w = list(_df_w.columns)
-            _lift_pos_w = {_lc_w: _col_names_w.index(_lc_w) for _lc_w, _ in warn_ci_pairs if _lc_w in _col_names_w}
-            _tbody_split_w = html.split("<tbody>", 1)
-            if len(_tbody_split_w) == 2:
-                _rows_w = _tbody_split_w[1].split("</tr>")
-                _ri_w = 0
-                for _rr_w in range(len(_rows_w)):
-                    if "<tr" not in _rows_w[_rr_w]:
-                        continue
-                    _tds_w = list(_re2.finditer(r'(<td[^>]*>)(.*?)(</td>)', _rows_w[_rr_w]))
-                    for _lc_w2, _cp_w in _lift_pos_w.items():
-                        if (_ri_w, _lc_w2) in _warn_cells_w and _cp_w < len(_tds_w):
-                            _mm_w = _tds_w[_cp_w]
-                            _rows_w[_rr_w] = _rows_w[_rr_w].replace(
-                                _mm_w.group(0),
-                                f'{_mm_w.group(1)}{_mm_w.group(2)} ⚠️{_mm_w.group(3)}', 1)
-                    _ri_w += 1
-                html = _tbody_split_w[0] + "<tbody>" + "</tr>".join(_rows_w)
+        html = _inject_warn_flags(html, styler.data, warn_ci_pairs)
     if seg_labels or seg_desc:
         def _tip(m):
             tag_pre  = m.group(1)
@@ -864,8 +686,6 @@ def build_excel(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
         wb = writer.book
         ws = writer.sheets["Segments"]
         pct_fmt  = wb.add_format({"num_format": "0.00%"})
-        green_fmt = wb.add_format({"bg_color": "#63BE7B", "num_format": "0.00%"})
-        red_fmt   = wb.add_format({"bg_color": "#F8696B", "num_format": "0.00%"})
         pct_keys = ["agg_bal", "agg_acct", "agg_lift_bal", "agg_lift_acct"] + \
                    [f"{c}_bal" for c in ordered_comms] + [f"{c}_acct" for c in ordered_comms]
         col_idx = {col: i for i, col in enumerate(out.columns)}
@@ -873,13 +693,6 @@ def build_excel(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
             if col not in col_idx:
                 continue
             ci = col_idx[col]
-            col_letter = ""
-            _ci_tmp = ci
-            while True:
-                col_letter = chr(ord("A") + _ci_tmp % 26) + col_letter
-                _ci_tmp = _ci_tmp // 26 - 1
-                if _ci_tmp < 0:
-                    break
             ws.conditional_format(
                 1, ci, len(out), ci,
                 {"type": "3_color_scale", "min_color": "#F8696B",
@@ -1186,12 +999,8 @@ with st.sidebar:
         bal_baseline_min = 25.0  # exclude segments whose avg starting balance is below €25
 
     # Show columns — metric toggle lives inside the Data tab (see tab_table section)
-    _show_bal       = True
-    _show_acct      = True
     show_n_cols     = False
     _show_metric_val = "both"  # default; overridden by widget inside tab_table
-
-    recency_decay = 0.0  # treat all dates equally
 
 
 # ── Preprocess ────────────────────────────────────────────────────────────────
@@ -1199,7 +1008,6 @@ df = preprocess(
     df_raw,
     date_min=str(date_from),
     date_max=str(date_to),
-    recency_decay=recency_decay,
     bal_clip_pct=float(bal_clip_pct),
 )
 
@@ -1488,15 +1296,7 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
         ra_suffix = "_lift_bal" if ra_metric == "Balance lift" else "_lift_acct"
         ra_label  = "Balance Lift %" if ra_metric == "Balance lift" else "Accounts Lift %"
 
-        def _pct_fmt_ra(v):
-            if pd.isna(v): return "—"
-            pct = v * 100
-            if abs(pct) < 0.1:
-                return f"{pct:.2f}%"
-            if abs(pct) < 1.0:
-                s = f"{pct:.1f}%"
-                return f"{pct:.2f}%" if s in ("1.0%", "-1.0%") else s
-            return f"{pct:.0f}%"
+        def _pct_fmt_ra(v): return _fmt_pct(v, na_str="—")
 
         _ra_shown_segs: List[str] = []  # top / recommended segments
         _ra_bot_segs:   List[str] = []  # bottom / avoid segments
@@ -1742,30 +1542,7 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                     _warn_p = _item[2] if len(_item) > 2 else None
                     _h = _styler.to_html()
                     if _warn_p:
-                        _df3 = _styler.data
-                        _wc3: set = set()
-                        for _lc3, _cc3 in _warn_p:
-                            if _lc3 in _df3.columns and _cc3 in _df3.columns:
-                                for _i3 in range(len(_df3)):
-                                    _lv3 = _df3[_lc3].iat[_i3]; _cv3 = _df3[_cc3].iat[_i3]
-                                    if pd.notna(_lv3) and pd.notna(_cv3) and abs(_cv3) > abs(_lv3):
-                                        _wc3.add((_i3, _lc3))
-                        if _wc3:
-                            _cn3 = list(_df3.columns)
-                            _lp3 = {_lc3: _cn3.index(_lc3) for _lc3, _ in _warn_p if _lc3 in _cn3}
-                            _ts3 = _h.split("<tbody>", 1)
-                            if len(_ts3) == 2:
-                                _rs3 = _ts3[1].split("</tr>")
-                                _ri3 = 0
-                                for _rr3 in range(len(_rs3)):
-                                    if "<tr" not in _rs3[_rr3]: continue
-                                    _td3 = list(_re3.finditer(r'(<td[^>]*>)(.*?)(</td>)', _rs3[_rr3]))
-                                    for _lc3b, _cp3 in _lp3.items():
-                                        if (_ri3, _lc3b) in _wc3 and _cp3 < len(_td3):
-                                            _m3 = _td3[_cp3]
-                                            _rs3[_rr3] = _rs3[_rr3].replace(_m3.group(0), f'{_m3.group(1)}{_m3.group(2)} ⚠️{_m3.group(3)}', 1)
-                                    _ri3 += 1
-                                _h = _ts3[0] + "<tbody>" + "</tr>".join(_rs3)
+                        _h = _inject_warn_flags(_h, _styler.data, _warn_p)
                     def _tip(m):
                         _tp = m.group(1); _cv = m.group(2); _id = _cv.strip()
                         _l = (SEGMENT_LABELS or {}).get(_id, ""); _d2 = (SEGMENT_DESCRIPTIONS or {}).get(_id, "")
@@ -1798,12 +1575,11 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                     "el.addEventListener('mouseleave',function(){tt.style.display='none';});"
                     "})})()"
                 )
-                _js_cols = ""
                 return (
                     f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
                     f"<style>{_css}</style></head><body>"
                     f"<div style='overflow:auto;max-height:{height-20}px;'>{_body}</div>"
-                    f"<script>{_js}{_js_cols}</script></body></html>"
+                    f"<script>{_js}</script></body></html>"
                 )
 
             _ra_styler2   = _make_single_comm_table(_ra_top)
@@ -2145,12 +1921,6 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
         st.warning("No table data — adjust filters in the Data tab first.")
     else:
         all_segs_sim = sorted(tbl.index.astype(str).tolist())
-        # Default to top 10 by first comm's balance lift (most actionable)
-        _first_lift = f"{ordered_comms[0]}_lift_bal" if ordered_comms else None
-        if _first_lift and _first_lift in tbl.columns:
-            _default_sim = tbl[_first_lift].dropna().sort_values(ascending=False).head(10).index.astype(str).tolist()
-        else:
-            _default_sim = all_segs_sim[:min(10, len(all_segs_sim))]
 
         sim_segs = st.multiselect(
             "OR — segments to include (union)",
@@ -2224,11 +1994,6 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                 valid = sub_all[col].notna()
                 tot = n_vals[valid].sum()
                 return float((sub_all.loc[valid, col] * n_vals[valid]).sum() / tot) if tot > 0 else np.nan
-
-            def _safe_proj(n, avg, lift):
-                if pd.isna(avg) or pd.isna(lift) or n == 0:
-                    return np.nan
-                return n * float(avg) * float(lift)
 
             sim_summary_rows = []
             for comm in ordered_comms:
@@ -2407,18 +2172,8 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
             else:
                 n_fmt = {_nc: "{:,.0f}" for _nc in n_disp_cols}
 
-            def _pct_fmt_sim(v):
-                if pd.isna(v): return ""
-                pct = v * 100
-                if abs(pct) < 0.1:
-                    return f"{pct:.2f}%"
-                if abs(pct) < 1.0:
-                    s = f"{pct:.1f}%"
-                    return f"{pct:.2f}%" if s in ("1.0%", "-1.0%") else s
-                return f"{pct:.0f}%"
-
             lift_disp_cols = [f"{c}{_metric_lbl}" for c in ordered_comms if f"{c}{_metric_lbl}" in detail.columns]
-            pct_fmt = {c: _pct_fmt_sim for c in lift_disp_cols}
+            pct_fmt = {c: _fmt_pct for c in lift_disp_cols}
             fmt_all = {**pct_fmt, **n_fmt}
 
             def _lift_color(col_series):
