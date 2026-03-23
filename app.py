@@ -97,12 +97,9 @@ def _load_csv(b: bytes) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False)
-def _load_audience_profile(path: str) -> Optional[pd.DataFrame]:
-    """Load audience_profile.csv, pre-computing derived columns if not already present."""
-    try:
-        aud = pd.read_csv(path)
-    except FileNotFoundError:
-        return None
+def _load_audience_profile(b: bytes) -> pd.DataFrame:
+    """Load audience_profile.csv from bytes, pre-computing derived columns if not already present."""
+    aud = pd.read_csv(io.BytesIO(b))
     today = pd.Timestamp.today().normalize()
     if "age" not in aud.columns:
         aud["age"] = (today - pd.to_datetime(aud["date_of_birth"], errors="coerce")).dt.days / 365.25
@@ -993,7 +990,12 @@ except FileNotFoundError:
     st.stop()
 
 # ── Load audience profile (demographics) ─────────────────────────────────────
-_aud_df = _load_audience_profile(str(_APP_DIR / "audience_profile.csv"))
+_aud_profile_path = _APP_DIR / "audience_profile.csv"
+try:
+    with open(_aud_profile_path, "rb") as _f:
+        _aud_df = _load_audience_profile(_f.read())
+except FileNotFoundError:
+    _aud_df = None
 
 missing_cols = [c for c in REQUIRED_COLS if c not in df_raw.columns]
 if missing_cols:
