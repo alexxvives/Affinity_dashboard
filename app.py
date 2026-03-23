@@ -5,7 +5,6 @@ import ast
 import io
 import os
 from concurrent.futures import ThreadPoolExecutor
-from itertools import combinations as _combinations
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
@@ -498,54 +497,6 @@ def build_table(
     metric_cols = [c for c in tbl.columns if c != "nsegment" and not c.endswith("_n")]
     tbl = tbl.dropna(subset=metric_cols, how="all").set_index("nsegment")
     return tbl
-
-
-@st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
-def _compute_combos(
-    df: pd.DataFrame,
-    comm: str,
-    pool_segs: tuple,   # ordered tuple of segment IDs (hashable)
-    min_n: int,
-    ind_lifts: tuple,   # sorted tuple of (seg, lift) pairs — hashable dict proxy
-) -> list:
-    """Vectorised combo-explorer computation. Cached to avoid rerunning on rerenders."""
-    _ind_lifts_d = dict(ind_lifts)
-    _ce_df_comm = df[df["communication"] == comm]
-    _ce_treated = _ce_df_comm[_ce_df_comm["contact_flag"] == 1]
-    _ce_ctrl    = _ce_df_comm[_ce_df_comm["contact_flag"] == 0]
-
-    # Pre-build segment → set of alpha_keys (one pass per segment, not per pair)
-    _ce_t_idx = {s: set(_ce_treated.loc[_ce_treated["nsegment"] == s, "alpha_key"]) for s in pool_segs}
-    _ce_c_idx = {s: set(_ce_ctrl.loc[_ce_ctrl["nsegment"] == s, "alpha_key"]) for s in pool_segs}
-
-    # Pre-build user→balance dicts — avoids O(N_users) .isin() scan for each pair
-    _ce_user_bal_t = _ce_treated.groupby("alpha_key")["balance_pct_change"].first().to_dict()
-    _ce_user_bal_c = _ce_ctrl.groupby("alpha_key")["balance_pct_change"].first().to_dict()
-
-    _combo_data = []
-    for _s1, _s2 in _combinations(pool_segs, 2):
-        _both_t = _ce_t_idx[_s1] & _ce_t_idx[_s2]
-        if len(_both_t) < min_n:
-            continue
-        _vals_t = np.array([_ce_user_bal_t[u] for u in _both_t if u in _ce_user_bal_t], dtype=float)
-        _avg_t  = float(_vals_t.mean()) if len(_vals_t) > 0 else np.nan
-        _both_c = _ce_c_idx[_s1] & _ce_c_idx[_s2]
-        _vals_c = np.array([_ce_user_bal_c[u] for u in _both_c if u in _ce_user_bal_c], dtype=float)
-        _avg_c  = float(_vals_c.mean()) if len(_vals_c) > 0 else np.nan
-        _ce_combo_lift = (_avg_t - _avg_c) if (pd.notna(_avg_t) and pd.notna(_avg_c)) else np.nan
-        _ce_best_ind   = max(float(_ind_lifts_d.get(_s1, np.nan)), float(_ind_lifts_d.get(_s2, np.nan)))
-        _ce_synergy    = (_ce_combo_lift - _ce_best_ind) if (pd.notna(_ce_combo_lift) and pd.notna(_ce_best_ind)) else np.nan
-        _combo_data.append({
-            "Segments":       f"{_s1} + {_s2}",
-            "_s1": _s1, "_s2": _s2,
-            "N customers":    len(_both_t),
-            "Combo Lift Bal": _ce_combo_lift,
-            "Best Ind. Lift": _ce_best_ind,
-            "Synergy":        _ce_synergy,
-            "_lbl1":          SEGMENT_LABELS.get(_s1, ""),
-            "_lbl2":          SEGMENT_LABELS.get(_s2, ""),
-        })
-    return _combo_data
 
 
 def _rdylgn(val: float, lo: float = -0.10, hi: float = 0.10) -> str:
@@ -1432,8 +1383,9 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             _sort_df = pd.DataFrame({'lift': _sorted_comm})
             _sort_df = _sort_df.sort_values('lift', ascending=False)
 
-            # Simple rank-order greedy: take segments in descending lift order
-            # until the min audience target is reached.
+            # Single-pass greedy: pre-determine NOT segments from the absolute bottom
+            # of the pool (lowest lift), build the NOT customer set upfront, then
+            # accumulate only NOT-suppressed customers in one loop — no second pass needed.
             _non_and = _sort_df[~_sort_df.index.isin(_and_idx)]
             _and_str_set = set(str(s) for s in _and_idx)
             _seg_custs_map: dict = {}
@@ -1441,9 +1393,7 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 _seg_custs_map[str(_s)] = set(
                     _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == str(_s)]["alpha_key"]
                 )
-            _running_custs: set = set().union(*[_seg_custs_map[str(s)] for s in _and_idx]) if _and_idx else set()
-            _selected: List[str] = []
-            _remaining = list(_non_and.index)  # already sorted by lift descending
+            _remaining = list(_non_and.index)  # sorted by lift descending
 
             # Pre-load all customer sets up front
             for _seg in _remaining:
@@ -1453,34 +1403,36 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                         _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == _s_str]["alpha_key"]
                     )
 
+            # Pre-determine NOT segments from the absolute bottom of the pool.
+            # Building the NOT set upfront lets the greedy loop count NOT-suppressed
+            # users at each step, so one pass always reaches the min-audience target.
+            _bot_n = max(3, min(15, max(1, len(_remaining)) // 4))
+            _ra_bot = _non_and.sort_values('lift').head(_bot_n)['lift']
+            _not_segs_set = set(str(s) for s in _ra_bot.index)
+            _not_custs: set = set()
+            for _ns in _ra_bot.index:
+                _not_custs |= _seg_custs_map.get(str(_ns), set())
+
+            # Greedy loop: skip NOT segments; accumulate only NOT-suppressed customers
+            _running_custs: set = (
+                (set().union(*[_seg_custs_map[str(s)] for s in _and_idx]) - _not_custs)
+                if _and_idx else set()
+            )
+            _selected: List[str] = []
             for _seg in _remaining:
+                if str(_seg) in _not_segs_set:
+                    continue
                 if len(_running_custs) >= ra_min_aud:
                     break
                 _selected.append(_seg)
-                _running_custs |= _seg_custs_map[str(_seg)]
+                _running_custs |= (_seg_custs_map[str(_seg)] - _not_custs)
 
             _ra_top_idx = list(dict.fromkeys(_and_idx + _selected))
             _ra_top     = _sorted_comm.reindex(
                 [s for s in _ra_top_idx if s in _sorted_comm.index], tolerance=None
             ).dropna()
 
-            # Bottom: lowest-lift from non-selected remainder (sent as NOT — customers suppressed)
-            _bot_n        = max(3, min(15, len(_ra_top_idx) // 2))
-            _remainder_df = _sort_df[~_sort_df.index.isin(_ra_top_idx)].sort_values('lift')
-            _ra_bot       = _remainder_df['lift'].head(_bot_n)
-
-            # Build NOT customer set: anyone in ANY bottom segment is suppressed,
-            # even if they also qualify via a top segment (OR logic).
-            _not_custs: set = set()
-            for _bot_s in _ra_bot.index:
-                _bot_str = str(_bot_s)
-                if _bot_str not in _seg_custs_map:
-                    _seg_custs_map[_bot_str] = set(
-                        _ra_comm_df_filt[_ra_comm_df_filt["nsegment"].astype(str) == _bot_str]["alpha_key"]
-                    )
-                _not_custs |= _seg_custs_map[_bot_str]
-
-            _final_custs = _running_custs - _not_custs
+            _final_custs = _running_custs  # already NOT-suppressed
 
             # Per-segment N (still used for the segment-level table display)
             _ra_n_vals = pd.Series({
@@ -1723,95 +1675,7 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 _and_note = f", {len(_and_idx)} mandatory AND" if _and_idx else ""
                 st.success(f"Sent {len(_ra_shown_segs)} segment{'s' if len(_ra_shown_segs) != 1 else ''} to the Audience Simulator{_and_note} (+ {len(_ra_bot_segs)} excluded).")
 
-        # ── Segment Combo Explorer ────────────────────────────────────────────
-        st.divider()
-        st.markdown("### Segment Combo Explorer")
-        st.caption(
-            "Finds segment pairs that **amplify** each other — customers in both segments respond "
-            "better than the best individual segment alone. "
-            "**Synergy** = combo lift − best individual lift. "
-            "Positive = combining these two segments unlocks extra response beyond targeting either alone."
-        )
-        _combo_comm = st.selectbox(
-            "Communication to analyse",
-            ordered_comms,
-            key="combo_comm",
-        )
-        # Internal constants — not exposed to users
-        _COMBO_POOL_N = 50   # top-N segments to scan pairs from
-        _COMBO_MIN_N  = 15   # minimum shared customers to include a pair
 
-        _lift_col_ce = f"{_combo_comm}_lift_bal"
-        if _lift_col_ce not in tbl.columns:
-            st.info("No lift data available for this communication.")
-        else:
-            _ce_pool = (
-                tbl[_lift_col_ce].dropna()
-                .sort_values(ascending=False)
-                .head(_COMBO_POOL_N)
-                .index.astype(str)
-                .tolist()
-            )
-            _ce_ind_lifts = tbl.loc[tbl.index.isin(_ce_pool), _lift_col_ce].to_dict()
-            # Pass ind_lifts as a sorted tuple of pairs so it is hashable for cache keying
-            _combo_data = _compute_combos(
-                df,
-                _combo_comm,
-                tuple(_ce_pool),
-                _COMBO_MIN_N,
-                tuple(sorted(_ce_ind_lifts.items())),
-            )
-
-            if _combo_data:
-                _combo_df = pd.DataFrame(_combo_data).sort_values("Synergy", ascending=False)
-                # Scatter: X = combo lift, Y = synergy, size = N customers
-                # Scale bubble sizes relative to the data so the largest is always prominent.
-                _n_max = _combo_df["N customers"].max()
-                _n_min = _combo_df["N customers"].min()
-                # Normalise to [8, 40] px diameter range
-                _n_range = max(_n_max - _n_min, 1)
-                _combo_df["_bubble_sz"] = 8 + 32 * (_combo_df["N customers"] - _n_min) / _n_range
-                _ce_fig = px.scatter(
-                    _combo_df,
-                    x="Combo Lift Bal",
-                    y="Synergy",
-                    size="_bubble_sz",
-                    size_max=40,
-                    color="Synergy",
-                    color_continuous_scale="RdYlGn",
-                    hover_name="Segments",
-                    custom_data=["_lbl1", "_lbl2", "N customers", "Best Ind. Lift"],
-                    title=f"Segment pair synergy — {_combo_comm}",
-                    labels={"Combo Lift Bal": "Combo Balance Lift", "Synergy": "Synergy (above best alone)"},
-                )
-                _ce_fig.update_traces(
-                    hovertemplate=(
-                        "<b>%{hovertext}</b><br>"
-                        "%{customdata[0]}<br>%{customdata[1]}<br>"
-                        "N: %{customdata[2]:,}<br>"
-                        "Combo lift: %{x:.1%}<br>"
-                        "Best alone: %{customdata[3]:.1%}<br>"
-                        "Synergy: %{y:.1%}<extra></extra>"
-                    )
-                )
-                _ce_fig.add_hline(y=0, line_dash="dash", line_color="gray", opacity=0.5,
-                                  annotation_text="Synergy = 0", annotation_position="bottom right")
-                _ce_fig.update_xaxes(tickformat=".0%")
-                _ce_fig.update_yaxes(tickformat=".0%")
-                _ce_fig.update_layout(coloraxis_showscale=False, height=420)
-                st.plotly_chart(_ce_fig, use_container_width=True)
-
-                _ce_show = _combo_df[["Segments", "N customers", "Combo Lift Bal", "Best Ind. Lift", "Synergy"]].head(20).copy()
-                def _pct_ce(v): return f"{v*100:.1f}%" if pd.notna(v) else "—"
-                st.dataframe(
-                    _ce_show.style
-                    .format({"Combo Lift Bal": _pct_ce, "Best Ind. Lift": _pct_ce, "Synergy": _pct_ce, "N customers": "{:,.0f}"})
-                    .background_gradient(subset=["Combo Lift Bal", "Synergy"], cmap="RdYlGn", vmin=-0.3, vmax=0.3),
-                    use_container_width=True,
-                )
-                st.caption(f"Scanning top {_COMBO_POOL_N} segments by lift. Minimum {_COMBO_MIN_N} shared customers per pair. Top 20 shown.")
-            else:
-                st.info(f"No segment pairs with ≥{_COMBO_MIN_N} shared customers found in the current top {_COMBO_POOL_N} pool.")
 
 
 # ══════════════════════════════════════════════════════════
@@ -2165,14 +2029,29 @@ Same logic: `unique customers × avg start accounts × headline lift%`.
         if st.button("▶ Run simulation", key="sim_run_btn", type="primary"):
             st.session_state["sim_run_triggered"] = True
             st.session_state["_sim_segs_snapshot"] = list(_sim_segs_eff)
+            st.session_state["_sim_excl_snapshot"] = list(sim_segs_excl or [])
         sim_metric = st.session_state.get("sim_metric", "Balance % lift")
 
-        if st.session_state.get("sim_run_triggered") and _sim_segs_eff:
+        # Use the snapshot captured at button-click time for all computation.
+        # This means editing the multiselects after a run does NOT re-trigger the
+        # expensive loop — only clicking ▶ Run simulation does.
+        _compute_segs = st.session_state.get("_sim_segs_snapshot", [])
+        _compute_excl = st.session_state.get("_sim_excl_snapshot", [])
+
+        if st.session_state.get("sim_run_triggered") and _compute_segs:
             # ── Pre-filter table rows and compute projected metrics ───────────
-            sub_all = tbl.loc[tbl.index.isin(_sim_segs_eff)].copy()
-            _sim_total_users = df[
-                (df["contact_flag"] == 1) & (df["nsegment"].isin(_sim_segs_eff))
-            ]["alpha_key"].nunique()
+            sub_all = tbl.loc[tbl.index.isin(_compute_segs)].copy()
+            # Total unique customers header: across all comms, with NOT suppression
+            # scoped to treated customers (contact_flag=1) only.
+            _global_not_ids: set = set(
+                df[(df["contact_flag"] == 1) & (df["nsegment"].isin(_compute_excl))]["alpha_key"]
+            ) if _compute_excl else set()
+            _sim_total_users_base = df[
+                (df["contact_flag"] == 1) & (df["nsegment"].isin(_compute_segs))
+            ]["alpha_key"]
+            if _global_not_ids:
+                _sim_total_users_base = _sim_total_users_base[~_sim_total_users_base.isin(_global_not_ids)]
+            _sim_total_users = _sim_total_users_base.nunique()
 
             def _w_avg(col, n_vals):
                 if col not in sub_all.columns:
@@ -2196,17 +2075,26 @@ Same logic: `unique customers × avg start accounts × headline lift%`.
 
                 # Cohort-level direct lift: each customer counted once regardless of
                 # how many selected segments they belong to (same method as RA tab).
-                # Falls back to naïve weighted average if control data is unavailable.
+                # NOT customers are scoped to this specific communication so the count
+                # matches what Recommended Audiences shows for the same comm.
+                _comm_not_ids: set = set(
+                    df[(df["contact_flag"] == 1) & (df["communication"] == comm)
+                       & (df["nsegment"].isin(_compute_excl))]["alpha_key"]
+                ) if _compute_excl else set()
                 _comm_df_t = (
                     df[(df["contact_flag"] == 1) & (df["communication"] == comm)
-                       & (df["nsegment"].isin(_sim_segs_eff))]
+                       & (df["nsegment"].isin(_compute_segs))]
                     .drop_duplicates("alpha_key")
                 )
+                if _comm_not_ids:
+                    _comm_df_t = _comm_df_t[~_comm_df_t["alpha_key"].isin(_comm_not_ids)]
                 _comm_df_c = (
                     df[(df["control_flag"] == 1) & (df["communication"] == comm)
-                       & (df["nsegment"].isin(_sim_segs_eff))]
+                       & (df["nsegment"].isin(_compute_segs))]
                     .drop_duplicates("alpha_key")
                 )
+                if _comm_not_ids:
+                    _comm_df_c = _comm_df_c[~_comm_df_c["alpha_key"].isin(_comm_not_ids)]
                 _t_bal  = _comm_df_t["balance_pct_change"].mean()  if not _comm_df_t.empty else np.nan
                 _c_bal  = _comm_df_c["balance_pct_change"].mean()  if not _comm_df_c.empty else np.nan
                 _t_acct = _comm_df_t["accounts_pct_change"].mean() if not _comm_df_t.empty else np.nan
@@ -2243,7 +2131,7 @@ Same logic: `unique customers × avg start accounts × headline lift%`.
                            .drop(columns="_rank")
                            .reset_index(drop=True))
 
-            _excl_note = f" ({len(sim_segs_excl)} excluded)" if sim_segs_excl else ""
+            _excl_note = f" ({len(_compute_excl)} excluded)" if _compute_excl else ""
             _tot_c1, _tot_c2 = st.columns([2, 1])
             _tot_c1.metric(
                 "Total unique customers (all selected segments)" + _excl_note,
@@ -2262,14 +2150,12 @@ Same logic: `unique customers × avg start accounts × headline lift%`.
             for i, row in sim_summary.iterrows():
                 lift_val = row["Expected Lift"]
                 label    = row["Communication"]
-                n_val    = int(row["Total N"]) if pd.notna(row["Total N"]) else 0
                 u_val    = int(row["Comm Users"]) if pd.notna(row.get("Comm Users")) else 0
-                delta_str = f"{n_val:,} segments"
+                delta_str = f"{u_val:,} customers"
                 _kpi_help = (
-                    f"**Total N = {n_val:,}** — sum of per-segment sample sizes. "
-                    f"A customer in {len(_sim_segs_eff)} segments counts {len(_sim_segs_eff)}×. "
-                    f"**Comm Users = {u_val:,}** — unique persons who received this communication "
-                    f"(used in the projection below). Both figures are correct; they measure different things."
+                    f"**{u_val:,} unique customers** received **{label}** and belong to at "
+                    f"least one of the {len(_compute_segs)} selected segments. "
+                    f"Each person is counted once. The projected figures below use this same headcount."
                 )
                 if pd.notna(lift_val):
                     kpi_cols[i].metric(label, f"{lift_val:.2%}", delta_str, help=_kpi_help)
@@ -2282,30 +2168,20 @@ Same logic: `unique customers × avg start accounts × headline lift%`.
                 proj_b_cols = st.columns(len(sim_summary))
                 for i, row in sim_summary.iterrows():
                     pv = row["Projected Bal \u20ac"]
-                    nu = int(row["Comm Users"]) if pd.notna(row.get("Comm Users")) else 0
                     proj_b_cols[i].metric(
                         row["Communication"],
                         f"\u20ac{pv:,.0f}" if pd.notna(pv) else "—",
-                        f"{nu:,} unique customers",
-                        help=(
-                            f"Formula: unique customers × avg start balance × lift%. "
-                            f"Uses {nu:,} *unique* persons (not segment-rows) as the headcount."
-                        ),
+                        help="Formula: unique customers × avg start balance × lift%.",
                     )
             else:
                 st.markdown("#### Projected account openings")
                 proj_a_cols = st.columns(len(sim_summary))
                 for i, row in sim_summary.iterrows():
                     av = row["Proj. Accounts"]
-                    nu = int(row["Comm Users"]) if pd.notna(row.get("Comm Users")) else 0
                     proj_a_cols[i].metric(
                         row["Communication"],
                         f"{av:,.0f}" if pd.notna(av) else "—",
-                        f"{nu:,} unique customers",
-                        help=(
-                            f"Formula: unique customers × avg start accounts × lift%. "
-                            f"Uses {nu:,} *unique* persons as the headcount."
-                        ),
+                        help="Formula: unique customers × avg start accounts × lift%.",
                     )
 
             st.divider()
