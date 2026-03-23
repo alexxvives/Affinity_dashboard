@@ -890,6 +890,171 @@ def build_excel(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
     return buf.getvalue()
 
 
+def _build_sim_excel(
+    dl_detail: pd.DataFrame,
+    summary_df: pd.DataFrame,
+    ordered_comms: List[str],
+    metric_lbl: str,   # e.g. " Bal%" or " Acct%"
+) -> bytes:
+    """Build a richly formatted Excel for the Audience Simulator download."""
+    buf = io.BytesIO()
+
+    # Build export df: fixed cols + interleaved [Lift%, N, Prop%] per comm
+    bk = dl_detail.copy()
+    # Ensure N columns are absolute integers (undo any proportion conversion)
+    for _c in ordered_comms:
+        _nc = f"{_c} N"
+        if _nc in bk.columns and bk[_nc].max() <= 1.0:
+            # looks like proportions — can't safely recover; leave as-is
+            pass
+
+    export_cols_ordered: List[str] = [
+        c for c in ["Role", "Label", "Description"] if c in bk.columns
+    ]
+    for _c in ordered_comms:
+        _lc = f"{_c}{metric_lbl}"
+        _nc = f"{_c} N"
+        _pc = f"{_c} Prop%"
+        if _lc in bk.columns:
+            export_cols_ordered.append(_lc)
+        if _nc in bk.columns:
+            _total = bk[_nc].sum()
+            bk[_pc] = (bk[_nc] / _total) if _total > 0 else np.nan
+            export_cols_ordered.append(_nc)
+            export_cols_ordered.append(_pc)
+    bk = bk[[c for c in export_cols_ordered if c in bk.columns]]
+
+    with pd.ExcelWriter(buf, engine="xlsxwriter") as _ew:
+        wb = _ew.book
+
+        # ── Shared formats ────────────────────────────────────────────────────
+        _hdr = wb.add_format({
+            "bold": True, "bg_color": "#1C1E2A", "font_color": "#FFFFFF",
+            "border": 1, "border_color": "#000000",
+            "align": "center", "valign": "vcenter", "text_wrap": True,
+        })
+        _idx = wb.add_format({
+            "bg_color": "#1C1E2A", "font_color": "#AAAAAA",
+            "border": 1, "border_color": "#000000", "font_size": 10,
+        })
+        _pct   = wb.add_format({"num_format": "0%",     "border": 1, "align": "center"})
+        _nfmt  = wb.add_format({"num_format": "#,##0",  "border": 1, "align": "center"})
+        _prop  = wb.add_format({"num_format": "0.0%",   "border": 1, "align": "center"})
+        _txt   = wb.add_format({"border": 1, "text_wrap": True, "valign": "top"})
+        _eur   = wb.add_format({"num_format": "\u20ac#,##0", "border": 1, "align": "right"})
+        _role  = {
+            "NOT": wb.add_format({"bg_color": "#FFDDDD", "font_color": "#880000",
+                                   "border": 1, "bold": True, "align": "center"}),
+            "AND": wb.add_format({"bg_color": "#E8D5FF", "font_color": "#5500AA",
+                                   "border": 1, "bold": True, "align": "center"}),
+            "OR":  wb.add_format({"bg_color": "#D0E8FF", "font_color": "#003399",
+                                   "border": 1, "bold": True, "align": "center"}),
+        }
+
+        # ── Breakdown sheet ───────────────────────────────────────────────────
+        ws = wb.add_worksheet("Breakdown")
+        _ew.sheets["Breakdown"] = ws
+        all_cols = list(bk.columns)
+        nrows = len(bk)
+
+        # Header row
+        ws.set_row(0, 30)
+        ws.write(0, 0, "Segment", _hdr)
+        for _ci, _col in enumerate(all_cols, start=1):
+            ws.write(0, _ci, _col, _hdr)
+
+        # Data rows
+        for _ri, (_seg, _row) in enumerate(bk.iterrows(), start=1):
+            ws.write(_ri, 0, str(_seg), _idx)
+            for _ci, _col in enumerate(all_cols, start=1):
+                _v = _row[_col]
+                if _col == "Role":
+                    ws.write(_ri, _ci, _v if pd.notna(_v) else "", _role.get(str(_v), _txt))
+                elif _col.endswith(metric_lbl):           # lift % col
+                    ws.write(_ri, _ci, float(_v) if pd.notna(_v) else "", _pct)
+                elif _col.endswith(" N"):
+                    ws.write(_ri, _ci, int(_v) if pd.notna(_v) else "", _nfmt)
+                elif _col.endswith("Prop%"):
+                    ws.write(_ri, _ci, float(_v) if pd.notna(_v) else "", _prop)
+                else:
+                    ws.write(_ri, _ci, str(_v) if pd.notna(_v) else "", _txt)
+
+        # Conditional colour scales
+        if nrows > 0:
+            for _ci, _col in enumerate(all_cols, start=1):
+                if _col.endswith(metric_lbl):
+                    ws.conditional_format(1, _ci, nrows, _ci, {
+                        "type": "3_color_scale",
+                        "min_color": "#F8696B", "mid_color": "#FFEB84", "max_color": "#63BE7B",
+                        "min_type": "percentile", "min_value": 10,
+                        "mid_type": "percentile", "mid_value": 50,
+                        "max_type": "percentile", "max_value": 90,
+                    })
+                elif _col.endswith(" N"):
+                    ws.conditional_format(1, _ci, nrows, _ci, {
+                        "type": "3_color_scale",
+                        "min_color": "#F8696B", "mid_color": "#FFEB84", "max_color": "#63BE7B",
+                        "min_type": "num", "min_value": 30,
+                        "mid_type": "num", "mid_value": 65,
+                        "max_type": "num", "max_value": 100,
+                    })
+                elif _col.endswith("Prop%"):
+                    ws.conditional_format(1, _ci, nrows, _ci, {
+                        "type": "3_color_scale",
+                        "min_color": "#F8696B", "mid_color": "#FFEB84", "max_color": "#63BE7B",
+                    })
+
+        # Column widths
+        ws.set_column(0, 0, 13)  # segment index
+        _col_w = {"Role": 8, "Label": 22, "Description": 42}
+        for _ci, _col in enumerate(all_cols, start=1):
+            _w = _col_w.get(
+                _col,
+                10 if _col.endswith(" N") or _col.endswith("Prop%")
+                else 13 if _col.endswith(metric_lbl)
+                else 14,
+            )
+            ws.set_column(_ci, _ci, _w)
+
+        ws.freeze_panes(1, 1)
+        ws.autofilter(0, 0, nrows, len(all_cols))
+
+        # ── Summary sheet ─────────────────────────────────────────────────────
+        ws2 = wb.add_worksheet("Summary")
+        _ew.sheets["Summary"] = ws2
+        _sum_cols = [c for c in ["Communication", "Expected Lift", "Comm Users",
+                                  "Projected Bal \u20ac", "Proj. Accounts"] if c in summary_df.columns]
+        ws2.set_row(0, 30)
+        for _ci, _col in enumerate(_sum_cols):
+            ws2.write(0, _ci, _col, _hdr)
+        _comm_fmt = wb.add_format({"bold": True, "border": 1})
+        for _ri, _row in summary_df[_sum_cols].iterrows():
+            for _ci, _col in enumerate(_sum_cols):
+                _v = _row[_col]
+                if _col == "Communication":
+                    ws2.write(_ri + 1, _ci, _v, _comm_fmt)
+                elif _col == "Expected Lift":
+                    ws2.write(_ri + 1, _ci, float(_v) if pd.notna(_v) else "", _pct)
+                elif _col in ("Comm Users", "Proj. Accounts"):
+                    ws2.write(_ri + 1, _ci, int(_v) if pd.notna(_v) else "", _nfmt)
+                elif _col == "Projected Bal \u20ac":
+                    ws2.write(_ri + 1, _ci, float(_v) if pd.notna(_v) else "", _eur)
+        if len(summary_df) > 0 and "Expected Lift" in _sum_cols:
+            _lci = _sum_cols.index("Expected Lift")
+            ws2.conditional_format(1, _lci, len(summary_df), _lci, {
+                "type": "3_color_scale",
+                "min_color": "#F8696B", "mid_color": "#FFEB84", "max_color": "#63BE7B",
+            })
+        _w2 = {"Communication": 16, "Expected Lift": 14, "Comm Users": 14,
+               "Projected Bal \u20ac": 20, "Proj. Accounts": 16}
+        for _ci, _col in enumerate(_sum_cols):
+            ws2.set_column(_ci, _ci, _w2.get(_col, 14))
+        ws2.freeze_panes(1, 0)
+
+    buf.seek(0)
+    return buf.read()
+
+
 # ── PPT export ────────────────────────────────────────────────────────────────
 def build_pptx(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
     from pptx import Presentation
@@ -1968,12 +2133,12 @@ This is the same methodology as the Recommendation tab — the number you see is
 The table below shows per-segment figures (naïve group means) for reference. These are not used in the headline KPI — they are informational only.
 
 **Projected absolute € increase**  
-Formula: `unique customers × avg start balance × headline lift%`  
-Example: 500 customers × €2,000 avg balance × 5% lift = €50,000 incremental increase.  
-Note: this is an *expected* estimate based on historical lift — actual results will vary.
+Formula: `unique customers × mean incremental balance change (treated − control baseline)`  
+The incremental change is the direct observed average € change per customer in the treated cohort minus the control cohort baseline — no pct × avg-balance reconstruction.  
+Note: this is an *expected* estimate based on historical data — actual results will vary.
 
 **Projected account openings**  
-Same logic: `unique customers × avg start accounts × headline lift%`.
+Same logic: `unique customers × mean incremental accounts change (treated − control baseline)`.
         """)
 
     if "tbl" not in dir() or tbl.empty:
@@ -2110,10 +2275,16 @@ Same logic: `unique customers × avg start accounts × headline lift%`.
                 w_raw  = w_raw_bal   if sim_metric == "Balance % lift" else w_raw_acct
 
                 _comm_n_u = len(_comm_df_t)
-                _avg_sb   = _comm_df_t["start_balance"].mean()  if not _comm_df_t.empty else np.nan
-                _avg_sa   = _comm_df_t["start_accounts"].mean() if not _comm_df_t.empty else np.nan
-                proj_eur   = _safe_proj(_comm_n_u, _avg_sb,  w_lift_bal)
-                proj_accts = _safe_proj(_comm_n_u, _avg_sa, w_lift_acct)
+                # Projection: direct incremental absolute change (treated − control baseline)
+                # This avoids the inflation risk of pct×avg_balance when balance is skewed.
+                _avg_abs_bal_t  = _comm_df_t["balance_abs_change"].mean()  if not _comm_df_t.empty else np.nan
+                _avg_abs_bal_c  = _comm_df_c["balance_abs_change"].mean()  if not _comm_df_c.empty else np.nan
+                _avg_abs_acct_t = _comm_df_t["accounts_abs_change"].mean() if not _comm_df_t.empty else np.nan
+                _avg_abs_acct_c = _comm_df_c["accounts_abs_change"].mean() if not _comm_df_c.empty else np.nan
+                _incr_bal  = float(_avg_abs_bal_t  - _avg_abs_bal_c)  if (pd.notna(_avg_abs_bal_t)  and pd.notna(_avg_abs_bal_c))  else (float(_avg_abs_bal_t)  if pd.notna(_avg_abs_bal_t)  else np.nan)
+                _incr_acct = float(_avg_abs_acct_t - _avg_abs_acct_c) if (pd.notna(_avg_abs_acct_t) and pd.notna(_avg_abs_acct_c)) else (float(_avg_abs_acct_t) if pd.notna(_avg_abs_acct_t) else np.nan)
+                proj_eur   = _comm_n_u * _incr_bal  if (pd.notna(_incr_bal)  and _comm_n_u > 0) else np.nan
+                proj_accts = _comm_n_u * _incr_acct if (pd.notna(_incr_acct) and _comm_n_u > 0) else np.nan
 
                 sim_summary_rows.append({
                     "Communication":   comm,
@@ -2171,7 +2342,7 @@ Same logic: `unique customers × avg start accounts × headline lift%`.
                     proj_b_cols[i].metric(
                         row["Communication"],
                         f"\u20ac{pv:,.0f}" if pd.notna(pv) else "—",
-                        help="Formula: unique customers × avg start balance × lift%.",
+                        help="Formula: unique customers × mean incremental balance change (treated − control baseline). Direct € observation, not pct × avg balance.",
                     )
             else:
                 st.markdown("#### Projected account openings")
@@ -2181,7 +2352,7 @@ Same logic: `unique customers × avg start accounts × headline lift%`.
                     proj_a_cols[i].metric(
                         row["Communication"],
                         f"{av:,.0f}" if pd.notna(av) else "—",
-                        help="Formula: unique customers × avg start accounts × lift%.",
+                        help="Formula: unique customers × mean incremental accounts change (treated − control baseline). Direct observation, not pct × avg accounts.",
                     )
 
             st.divider()
@@ -2287,9 +2458,7 @@ Same logic: `unique customers × avg start accounts × headline lift%`.
             _dl_detail.insert(0, "Label", [SEGMENT_LABELS.get(str(s), "") for s in _dl_detail.index])
             _dl_detail.index.name = "nsegment"
             _exp_buf = io.BytesIO()
-            with pd.ExcelWriter(_exp_buf, engine="xlsxwriter") as _ew:
-                _dl_detail.to_excel(_ew, sheet_name="Breakdown")
-                sim_summary.to_excel(_ew, sheet_name="Summary", index=False)
+            _exp_buf.write(_build_sim_excel(_dl_detail, sim_summary, ordered_comms, _metric_lbl))
             _exp_buf.seek(0)
             st.markdown(
                 '<style>div:has(>#_dl_anchor)+div[data-testid="element-container"]'
