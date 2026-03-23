@@ -17,10 +17,16 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 try:
-    from generate_dummy_data import SEGMENT_DESCRIPTIONS, SEGMENT_LABELS
+    from generate_dummy_data import PRODUCT_COLS, SEGMENT_DESCRIPTIONS, SEGMENT_LABELS
 except ImportError:
     SEGMENT_LABELS: Dict[str, str] = {}
     SEGMENT_DESCRIPTIONS: Dict[str, str] = {}
+    PRODUCT_COLS: List[str] = [
+        "Business Line Of Credit", "Cdira", "Checking", "Commercial Loan",
+        "Credit Card", "Escrow", "Standalone Savings", "Home Equity",
+        "Investments", "Loan", "Loan - Personal", "Loc - Personal",
+        "Money Market", "Mortgage", "Odloc", "Other", "Savings",
+    ]
 
 # Load real segment data from segment_descriptions.csv (overrides generate_dummy_data values)
 try:
@@ -88,6 +94,26 @@ def _df_hash(df: pd.DataFrame) -> int:
 def _load_csv(b: bytes) -> pd.DataFrame:
     df = pd.read_csv(io.BytesIO(b))
     return df.rename(columns={"Communication": "communication", "Contact_flag": "contact_flag"})
+
+
+@st.cache_data(show_spinner=False)
+def _load_audience_profile(path: str) -> Optional[pd.DataFrame]:
+    """Load audience_profile.csv, pre-computing derived columns if not already present."""
+    try:
+        aud = pd.read_csv(path)
+    except FileNotFoundError:
+        return None
+    today = pd.Timestamp.today().normalize()
+    if "age" not in aud.columns:
+        aud["age"] = (today - pd.to_datetime(aud["date_of_birth"], errors="coerce")).dt.days / 365.25
+    if "tenure_years" not in aud.columns:
+        aud["tenure_years"] = (today - pd.to_datetime(aud["date_first_relation"], errors="coerce")).dt.days / 365.25
+    if "sow" not in aud.columns:
+        aud["sow"] = (aud["amount_deposit_spot_balance"] / aud["total_deposits_ixi"]).clip(0, 1)
+    if "n_products" not in aud.columns:
+        present_prod_cols = [c for c in PRODUCT_COLS if c in aud.columns]
+        aud["n_products"] = aud[present_prod_cols].sum(axis=1).astype(int)
+    return aud
 
 
 @st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
@@ -965,6 +991,9 @@ try:
 except FileNotFoundError:
     st.error("data.csv not found — run `python generate_dummy_data.py` first.")
     st.stop()
+
+# ── Load audience profile (demographics) ─────────────────────────────────────
+_aud_df = _load_audience_profile(str(_APP_DIR / "audience_profile.csv"))
 
 missing_cols = [c for c in REQUIRED_COLS if c not in df_raw.columns]
 if missing_cols:
@@ -2229,6 +2258,156 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                 use_container_width=True,
                 help="Exports two sheets: 'Breakdown' (per-segment lift & N with Role) and 'Summary' (projected metrics per communication).",
             )
+            # ── Audience Profile ──────────────────────────────────────────────────────
+            st.markdown("---")
+            st.markdown("#### Audience Profile")
+            st.caption(
+                f"Demographics of the {len(_sim_segs_eff):,} segment(s) in this audience.  "
+                "Data sourced from `audience_profile.csv`."
+            )
+            if _aud_df is None:
+                st.info(
+                    "No audience profile data found. "
+                    "Run `python generate_dummy_data.py` to generate `audience_profile.csv`."
+                )
+            else:
+                _aud_keys = df.loc[df["nsegment"].isin(_sim_segs_eff), "alpha_key"].unique()
+                _aud = _aud_df[_aud_df["alpha_key"].isin(_aud_keys)].copy()
+                if len(_aud) == 0:
+                    st.info("No demographic records found for the selected segments.")
+                else:
+                    # ── KPI row ──────────────────────────────────────────────
+                    _pk1, _pk2, _pk3, _pk4, _pk5 = st.columns(5)
+                    _pk1.metric("Audience size", f"{len(_aud):,}")
+                    _pk2.metric("Median age", f"{_aud['age'].median():.0f} yrs")
+                    _pk3.metric("Median tenure", f"{_aud['tenure_years'].median():.1f} yrs")
+                    _pk4.metric(
+                        "Mobile / ROB active",
+                        f"{_aud['flag_last90_active_mob_rob'].mean() * 100:.0f}%",
+                    )
+                    _pk5.metric("Median SoW", f"{_aud['sow'].median() * 100:.0f}%")
+
+                    # ── Row 1: Age distribution + Gender ─────────────────────
+                    _ac1, _ac2 = st.columns([3, 2])
+                    with _ac1:
+                        _age_bins   = [18, 25, 35, 45, 55, 65, 75, 120]
+                        _age_labels = ["18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"]
+                        _aud["_age_group"] = pd.cut(
+                            _aud["age"], bins=_age_bins, labels=_age_labels, right=False
+                        )
+                        _age_dist = (
+                            _aud["_age_group"].value_counts()
+                            .reindex(_age_labels)
+                            .fillna(0)
+                            .reset_index()
+                        )
+                        _age_dist.columns = ["Age group", "Customers"]
+                        _fig_age = px.bar(
+                            _age_dist, x="Age group", y="Customers",
+                            title="Age Distribution",
+                            color="Customers", color_continuous_scale="Blues",
+                        )
+                        _fig_age.update_layout(
+                            height=280, margin=dict(l=20, r=20, t=40, b=20),
+                            coloraxis_showscale=False, showlegend=False,
+                        )
+                        st.plotly_chart(_fig_age, use_container_width=True)
+                    with _ac2:
+                        _gender_counts = _aud["gender"].value_counts().reset_index()
+                        _gender_counts.columns = ["Gender", "Count"]
+                        _fig_gender = px.pie(
+                            _gender_counts, values="Count", names="Gender",
+                            title="Gender", hole=0.4,
+                            color_discrete_sequence=px.colors.qualitative.Pastel,
+                        )
+                        _fig_gender.update_layout(
+                            height=280, margin=dict(l=20, r=20, t=40, b=20),
+                            legend=dict(orientation="v", yanchor="middle", y=0.5),
+                        )
+                        st.plotly_chart(_fig_gender, use_container_width=True)
+
+                    # ── Row 2: Tenure + Share of Wallet ──────────────────────
+                    _ac3, _ac4 = st.columns(2)
+                    with _ac3:
+                        _fig_ten = px.histogram(
+                            _aud, x="tenure_years", nbins=20,
+                            title="Tenure Distribution",
+                            labels={"tenure_years": "Tenure (years)"},
+                            color_discrete_sequence=["#4C9BE8"],
+                        )
+                        _fig_ten.update_layout(height=260, margin=dict(l=20, r=20, t=40, b=20))
+                        st.plotly_chart(_fig_ten, use_container_width=True)
+                    with _ac4:
+                        _fig_sow = px.histogram(
+                            _aud, x="sow", nbins=20,
+                            title="Share of Wallet  (deposit ÷ net worth)",
+                            labels={"sow": "SoW"},
+                            color_discrete_sequence=["#68B984"],
+                        )
+                        _fig_sow.update_layout(height=260, margin=dict(l=20, r=20, t=40, b=20))
+                        st.plotly_chart(_fig_sow, use_container_width=True)
+
+                    # ── Row 3: Top states + # products held ──────────────────
+                    _ac5, _ac6 = st.columns(2)
+                    with _ac5:
+                        _state_cnt = (
+                            _aud["state"].value_counts().head(10)
+                            .reset_index()
+                        )
+                        _state_cnt.columns = ["State", "Customers"]
+                        _fig_state = px.bar(
+                            _state_cnt, x="Customers", y="State",
+                            orientation="h", title="Top 10 States",
+                            color="Customers", color_continuous_scale="Teal",
+                        )
+                        _fig_state.update_layout(
+                            height=320, margin=dict(l=20, r=20, t=40, b=20),
+                            coloraxis_showscale=False,
+                            yaxis=dict(categoryorder="total ascending"),
+                        )
+                        st.plotly_chart(_fig_state, use_container_width=True)
+                    with _ac6:
+                        _nprod_cnt = (
+                            _aud["n_products"].value_counts().sort_index()
+                            .reset_index()
+                        )
+                        _nprod_cnt.columns = ["Products", "Customers"]
+                        _fig_np = px.bar(
+                            _nprod_cnt, x="Products", y="Customers",
+                            title="# Products Held",
+                            color="Customers", color_continuous_scale="YlOrRd",
+                        )
+                        _fig_np.update_layout(
+                            height=320, margin=dict(l=20, r=20, t=40, b=20),
+                            coloraxis_showscale=False,
+                        )
+                        st.plotly_chart(_fig_np, use_container_width=True)
+
+                    # ── Row 4: Product ownership rates (full width) ───────────
+                    _prod_cols_present = [c for c in PRODUCT_COLS if c in _aud.columns]
+                    if _prod_cols_present:
+                        _prod_rates = (
+                            (_aud[_prod_cols_present].mean() * 100)
+                            .sort_values(ascending=True)
+                            .reset_index()
+                        )
+                        _prod_rates.columns = ["Product", "% with product"]
+                        _fig_prods = px.bar(
+                            _prod_rates, x="% with product", y="Product",
+                            orientation="h",
+                            title="Product Ownership Rates",
+                            color="% with product", color_continuous_scale="Purpor",
+                            text=_prod_rates["% with product"].map(lambda v: f"{v:.1f}%"),
+                        )
+                        _fig_prods.update_traces(textposition="outside")
+                        _fig_prods.update_layout(
+                            height=max(320, 26 * len(_prod_cols_present) + 80),
+                            margin=dict(l=20, r=80, t=40, b=20),
+                            coloraxis_showscale=False,
+                            xaxis=dict(ticksuffix="%", range=[0, 100]),
+                        )
+                        st.plotly_chart(_fig_prods, use_container_width=True)
+
         elif st.session_state.get("sim_run_triggered") and not _sim_segs_eff:
             st.warning("No segments to analyse — all included segments are also in the exclude list. Remove some exclusions.")
 

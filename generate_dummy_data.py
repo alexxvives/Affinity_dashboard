@@ -151,9 +151,120 @@ def generate_dummy_dataset(n_users=5000, n_rows=100000, seed=42):
     return df
 
 
+PRODUCT_COLS = [
+    "Business Line Of Credit", "Cdira", "Checking", "Commercial Loan",
+    "Credit Card", "Escrow", "Standalone Savings", "Home Equity",
+    "Investments", "Loan", "Loan - Personal", "Loc - Personal",
+    "Money Market", "Mortgage", "Odloc", "Other", "Savings",
+]
+
+_US_STATES = [
+    "AL","AK","AZ","AR","CA","CO","CT","DE","FL","GA","HI","ID","IL","IN","IA",
+    "KS","KY","LA","ME","MD","MA","MI","MN","MS","MO","MT","NE","NV","NH","NJ",
+    "NM","NY","NC","ND","OH","OK","OR","PA","RI","SC","SD","TN","TX","UT","VT",
+    "VA","WA","WV","WI","WY",
+]
+# Rough population-weighted state probabilities (larger states more likely)
+_STATE_WEIGHTS = [
+    1,1,2,1,10,2,1,1,7,4,1,1,5,2,1,
+    1,1,1,1,2,2,3,2,1,2,1,1,1,1,3,
+    1,7,3,1,4,1,1,4,1,2,1,2,9,1,1,
+    3,3,1,2,1,
+]
+
+
+def generate_audience_profile_data(n_users: int = 5000, seed: int = 42) -> pd.DataFrame:
+    """Generate one demographic row per user to pair with the main transactional dataset."""
+    rng = np.random.default_rng(seed)
+
+    users = [f"user_{i:05d}" for i in range(n_users)]
+    today = datetime(2026, 3, 23)
+
+    # ── Core dates ────────────────────────────────────────────────────────────
+    # Ages roughly 22-72 years old
+    dob_offsets = rng.integers(int(365.25 * 22), int(365.25 * 72), size=n_users)
+    dates_of_birth = [today - timedelta(days=int(d)) for d in dob_offsets]
+
+    # Tenure 0.5 – 15 years, skewed toward shorter tenures
+    tenure_days = rng.integers(180, int(365.25 * 15), size=n_users)
+    date_first_relation = [today - timedelta(days=int(d)) for d in tenure_days]
+
+    # ── Behavioral & demographic flags ───────────────────────────────────────
+    # 68% active on mobile/ROB in last 90 days; slightly correlated with younger age
+    age_years = dob_offsets / 365.25
+    active_base_prob = np.clip(0.80 - 0.004 * (age_years - 35), 0.30, 0.92)
+    flag_active = (rng.random(n_users) < active_base_prob).astype(int)
+
+    genders = rng.choice(["Male", "Female", "Non-binary"], size=n_users, p=[0.48, 0.49, 0.03])
+
+    state_probs = np.array(_STATE_WEIGHTS, dtype=float)
+    state_probs /= state_probs.sum()
+    states = rng.choice(_US_STATES, size=n_users, p=state_probs)
+
+    # ── Financial columns (log-normal to mimic real wealth distributions) ─────
+    deposit_bal = np.exp(rng.normal(np.log(45_000), 1.2, size=n_users)).clip(100, 2_000_000)
+    # IXI (net worth) is always ≥ deposit balance, generally much larger
+    ixi_multiplier = np.exp(rng.normal(1.5, 0.8, size=n_users)).clip(1.0, 50.0)
+    total_ixi = deposit_bal * ixi_multiplier
+
+    # ── Product flags ─────────────────────────────────────────────────────────
+    # Each product has a realistic adoption rate; products are mildly correlated
+    # through a latent "wealth" factor
+    wealth_factor = np.log(deposit_bal) / np.log(45_000)  # centred near 1.0
+    product_probs = {
+        "Checking":                np.clip(0.82 * wealth_factor ** 0.1, 0.50, 0.95),
+        "Savings":                 np.clip(0.60 * wealth_factor ** 0.2, 0.30, 0.85),
+        "Credit Card":             np.clip(0.55 * wealth_factor ** 0.3, 0.20, 0.80),
+        "Mortgage":                np.clip(0.28 * wealth_factor ** 0.5, 0.05, 0.60),
+        "Home Equity":             np.clip(0.18 * wealth_factor ** 0.6, 0.03, 0.45),
+        "Investments":             np.clip(0.22 * wealth_factor ** 0.8, 0.04, 0.55),
+        "Money Market":            np.clip(0.15 * wealth_factor ** 0.7, 0.03, 0.40),
+        "Loan":                    np.clip(0.20 * wealth_factor ** 0.3, 0.05, 0.50),
+        "Loan - Personal":         np.clip(0.16 * wealth_factor ** 0.2, 0.04, 0.45),
+        "Loc - Personal":          np.clip(0.12 * wealth_factor ** 0.3, 0.03, 0.35),
+        "Standalone Savings":      np.clip(0.10 * wealth_factor ** 0.4, 0.02, 0.30),
+        "Business Line Of Credit": np.clip(0.08 * wealth_factor ** 0.9, 0.01, 0.25),
+        "Commercial Loan":         np.clip(0.06 * wealth_factor ** 0.9, 0.01, 0.20),
+        "Cdira":                   np.clip(0.12 * wealth_factor ** 0.5, 0.02, 0.30),
+        "Escrow":                  np.clip(0.09 * wealth_factor ** 0.6, 0.01, 0.25),
+        "Odloc":                   np.clip(0.07 * wealth_factor ** 0.4, 0.01, 0.20),
+        "Other":                   np.clip(0.14 * wealth_factor ** 0.2, 0.03, 0.35),
+    }
+    flags = {
+        col: (rng.random(n_users) < product_probs[col]).astype(int)
+        for col in PRODUCT_COLS
+    }
+
+    df = pd.DataFrame({
+        "alpha_key":                    users,
+        "date_first_relation":          [d.strftime("%Y-%m-%d") for d in date_first_relation],
+        "date_of_birth":                [d.strftime("%Y-%m-%d") for d in dates_of_birth],
+        "flag_last90_active_mob_rob":   flag_active,
+        "gender":                       genders,
+        "state":                        states,
+        "amount_deposit_spot_balance":  deposit_bal.round(2),
+        "total_deposits_ixi":           total_ixi.round(2),
+        **flags,
+    })
+
+    # ── Feature engineering ───────────────────────────────────────────────────
+    df["age"] = ((today - pd.to_datetime(df["date_of_birth"])).dt.days / 365.25).round(1)
+    df["tenure_years"] = ((today - pd.to_datetime(df["date_first_relation"])).dt.days / 365.25).round(2)
+    df["sow"] = (df["amount_deposit_spot_balance"] / df["total_deposits_ixi"]).clip(0, 1).round(4)
+    df["n_products"] = df[PRODUCT_COLS].sum(axis=1).astype(int)
+
+    return df
+
+
 if __name__ == '__main__':
     df_dummy = generate_dummy_dataset(n_users=5000, n_rows=100000, seed=42)
     df_dummy.to_csv('data.csv', index=False)
     print('Dummy dataset written: data.csv')
     print(f"Rows: {len(df_dummy):,}   Users: {df_dummy['alpha_key'].nunique():,}")
     print(df_dummy.groupby('Communication')['alpha_key'].count().sort_values(ascending=False))
+
+    aud = generate_audience_profile_data(n_users=5000, seed=42)
+    aud.to_csv('audience_profile.csv', index=False)
+    print(f"\nAudience profile written: audience_profile.csv")
+    print(f"Rows: {len(aud):,}   Columns: {list(aud.columns)}")
+    print(aud[["age", "tenure_years", "sow", "n_products"]].describe().round(2).to_string())
