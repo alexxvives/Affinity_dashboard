@@ -1919,35 +1919,47 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 labels={"amount_deposit_spot_balance": "Deposit ($)",
                         "total_deposits_ixi": "IXI ($)", "sow": "SoW"},
                 opacity=0.5)
-            # ── Percentile contour lines ──────────────────────────────────
+            # ── Percentile contour lines (rendered on top via go.Scatter paths) ──
             if len(_sow_df2) >= 20:
                 import plotly.graph_objects as go
+                import matplotlib
+                matplotlib.use('Agg')
+                import matplotlib.pyplot as _plt2
                 from scipy.stats import gaussian_kde as _gkde_sow2
                 _x2 = _sow_df2["amount_deposit_spot_balance"].values
                 _y2 = _sow_df2["total_deposits_ixi"].values
                 try:
                     _kde2 = _gkde_sow2(np.vstack([_x2, _y2]))
-                    _xi2 = np.linspace(_x2.min(), _x2.max(), 80)
-                    _yi2 = np.linspace(_y2.min(), _y2.max(), 80)
+                    _xi2 = np.linspace(_x2.min(), _x2.max(), 120)
+                    _yi2 = np.linspace(_y2.min(), _y2.max(), 120)
                     _XX2, _YY2 = np.meshgrid(_xi2, _yi2)
                     _ZZ2 = _kde2(np.vstack([_XX2.ravel(), _YY2.ravel()])).reshape(_XX2.shape)
                     _z_pts2 = _kde2(np.vstack([_x2, _y2]))
                     for _plbl2, _clr2 in [
-                        (90, "#0d47a1"),
-                        (75, "#e65100"),
-                        (50, "#1b5e20"),
+                        (90, "#2166ac"),   # blue  — outermost boundary
+                        (75, "#f4a11d"),   # amber — middle band
+                        (50, "#c0392b"),   # red   — dense core
                     ]:
                         _lvl2 = float(np.percentile(_z_pts2, 100 - _plbl2))
                         if _lvl2 <= 0:
                             continue
-                        _fig_sow2.add_trace(go.Contour(
-                            x=_xi2, y=_yi2, z=_ZZ2,
-                            autocontour=False,
-                            contours=dict(start=_lvl2, end=_lvl2 * 1.5, size=_lvl2, coloring='none'),
-                            line=dict(color=_clr2, width=2.5),
-                            showscale=False, hoverinfo='skip',
-                            name=f'{_plbl2}th pct', showlegend=True,
-                        ))
+                        _mfig2, _max2 = _plt2.subplots()
+                        _cs2 = _max2.contour(_XX2, _YY2, _ZZ2, levels=[_lvl2])
+                        _plt2.close(_mfig2)
+                        _first2 = True
+                        for _seg2 in _cs2.get_paths():
+                            _verts2 = _seg2.vertices
+                            _fig_sow2.add_trace(go.Scatter(
+                                x=np.append(_verts2[:, 0], _verts2[0, 0]),
+                                y=np.append(_verts2[:, 1], _verts2[0, 1]),
+                                mode='lines',
+                                line=dict(color=_clr2, width=2.5),
+                                name=f'{_plbl2}th pct',
+                                showlegend=_first2,
+                                legendgroup=f'pct{_plbl2}_2',
+                                hoverinfo='skip',
+                            ))
+                            _first2 = False
                 except Exception:
                     pass
             _fig_sow2.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
@@ -2784,35 +2796,47 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             },
                             opacity=0.55,
                         )
-                        # ── Percentile contour lines ──────────────────────
+                        # ── Percentile contour lines (rendered on top via go.Scatter paths) ──
                         if len(_sow_sc_df) >= 20:
                             import plotly.graph_objects as go
+                            import matplotlib
+                            matplotlib.use('Agg')
+                            import matplotlib.pyplot as _plts
                             from scipy.stats import gaussian_kde as _gkde_sow
                             _xs = _sow_sc_df["amount_deposit_spot_balance"].values
                             _ys = _sow_sc_df["total_deposits_ixi"].values
                             try:
                                 _kdes = _gkde_sow(np.vstack([_xs, _ys]))
-                                _xis = np.linspace(_xs.min(), _xs.max(), 80)
-                                _yis = np.linspace(_ys.min(), _ys.max(), 80)
+                                _xis = np.linspace(_xs.min(), _xs.max(), 120)
+                                _yis = np.linspace(_ys.min(), _ys.max(), 120)
                                 _XXs, _YYs = np.meshgrid(_xis, _yis)
                                 _ZZs = _kdes(np.vstack([_XXs.ravel(), _YYs.ravel()])).reshape(_XXs.shape)
                                 _z_pts_s = _kdes(np.vstack([_xs, _ys]))
                                 for _plbls, _clrs in [
-                                    (90, "#0d47a1"),
-                                    (75, "#e65100"),
-                                    (50, "#1b5e20"),
+                                    (90, "#2166ac"),   # blue  — outermost boundary
+                                    (75, "#f4a11d"),   # amber — middle band
+                                    (50, "#c0392b"),   # red   — dense core
                                 ]:
                                     _lvls = float(np.percentile(_z_pts_s, 100 - _plbls))
                                     if _lvls <= 0:
                                         continue
-                                    _fig_sow.add_trace(go.Contour(
-                                        x=_xis, y=_yis, z=_ZZs,
-                                        autocontour=False,
-                                        contours=dict(start=_lvls, end=_lvls * 1.5, size=_lvls, coloring='none'),
-                                        line=dict(color=_clrs, width=2.5),
-                                        showscale=False, hoverinfo='skip',
-                                        name=f'{_plbls}th pct', showlegend=True,
-                                    ))
+                                    _mfigs, _maxs = _plts.subplots()
+                                    _css = _maxs.contour(_XXs, _YYs, _ZZs, levels=[_lvls])
+                                    _plts.close(_mfigs)
+                                    _firsts = True
+                                    for _segs in _css.get_paths():
+                                        _vertss = _segs.vertices
+                                        _fig_sow.add_trace(go.Scatter(
+                                            x=np.append(_vertss[:, 0], _vertss[0, 0]),
+                                            y=np.append(_vertss[:, 1], _vertss[0, 1]),
+                                            mode='lines',
+                                            line=dict(color=_clrs, width=2.5),
+                                            name=f'{_plbls}th pct',
+                                            showlegend=_firsts,
+                                            legendgroup=f'pct{_plbls}_s',
+                                            hoverinfo='skip',
+                                        ))
+                                        _firsts = False
                             except Exception:
                                 pass
                         _fig_sow.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
