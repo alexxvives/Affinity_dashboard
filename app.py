@@ -1919,7 +1919,7 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 labels={"amount_deposit_spot_balance": "Deposit ($)",
                         "total_deposits_ixi": "IXI ($)", "sow": "SoW"},
                 opacity=0.5)
-            # ── Percentile contour lines (rendered on top via go.Scatter paths) ──
+            # ── Percentile contour lines (add_shape layer='above' → always on top) ──
             if len(_sow_df2) >= 20:
                 import plotly.graph_objects as go
                 import matplotlib
@@ -1935,35 +1935,58 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                     _yi2 = np.linspace(_y2.min(), _y2.max(), 200)
                     _XX2, _YY2 = np.meshgrid(_xi2, _yi2)
                     _ZZ2 = _kde2(np.vstack([_XX2.ravel(), _YY2.ravel()])).reshape(_XX2.shape)
-                    _ZZ2 = _gf2(_ZZ2, sigma=3)  # smooth to remove jagged edges
+                    _ZZ2 = _gf2(_ZZ2, sigma=3)
                     _z_pts2 = _kde2(np.vstack([_x2, _y2]))
                     for _plbl2, _clr2 in [
-                        (90, "#2166ac"),   # blue  — outermost boundary
-                        (75, "#f4a11d"),   # amber — middle band
-                        (50, "#c0392b"),   # red   — dense core
+                        (90, "#2166ac"),   # blue  — outermost (90% of pts inside)
+                        (50, "#1a9850"),   # green — 50% inside
+                        (25, "#f4a11d"),   # amber — 25% inside
+                        (10, "#c0392b"),   # red   — dense core
                     ]:
                         _lvl2 = float(np.percentile(_z_pts2, 100 - _plbl2))
                         if _lvl2 <= 0:
                             continue
+                        # Dummy trace for legend entry only (shapes don't appear in legend)
+                        _fig_sow2.add_trace(go.Scatter(
+                            x=[None], y=[None], mode='lines',
+                            line=dict(color=_clr2, width=2.5),
+                            name=f'{_plbl2}th pct',
+                            legendgroup=f'pct{_plbl2}_2', showlegend=True,
+                        ))
                         _mfig2, _max2 = _plt2.subplots()
                         _cs2 = _max2.contour(_XX2, _YY2, _ZZ2, levels=[_lvl2])
                         _plt2.close(_mfig2)
-                        _first2 = True
                         for _seg2 in _cs2.get_paths():
                             _verts2 = _seg2.vertices
                             if len(_verts2) < 5:
                                 continue
-                            _fig_sow2.add_trace(go.Scatter(
-                                x=np.append(_verts2[:, 0], _verts2[0, 0]),
-                                y=np.append(_verts2[:, 1], _verts2[0, 1]),
-                                mode='lines',
+                            # Open contour at lower-left corner, extend to both axes
+                            _myi2 = int(np.argmin(_verts2[:, 1]))
+                            _mxi2 = int(np.argmin(_verts2[:, 0]))
+                            _n2 = len(_verts2)
+                            _rol2 = np.roll(_verts2, -_myi2, axis=0)
+                            _nmx2 = (_mxi2 - _myi2) % _n2
+                            _arc_a2 = _rol2[:_nmx2 + 1]
+                            _arc_b2 = _rol2[_nmx2:]
+                            if _arc_a2.shape[0] < 3 or _arc_b2.shape[0] < 3:
+                                _opn2 = _rol2
+                            elif np.mean(_arc_a2[:, 0] + _arc_a2[:, 1]) >= np.mean(_arc_b2[:, 0] + _arc_b2[:, 1]):
+                                _opn2 = _arc_a2
+                            else:
+                                _opn2 = _arc_b2
+                            _pts2 = np.vstack([
+                                [max(float(_opn2[0, 0]), 0), 0],
+                                _opn2,
+                                [0, max(float(_opn2[-1, 1]), 0)],
+                            ])
+                            _svg2 = "M " + " L ".join(f"{float(_px):.4f},{float(_py):.4f}" for _px, _py in _pts2)
+                            _fig_sow2.add_shape(
+                                type='path', path=_svg2,
+                                xref='x', yref='y',
                                 line=dict(color=_clr2, width=2.5),
-                                name=f'{_plbl2}th pct',
-                                showlegend=_first2,
-                                legendgroup=f'pct{_plbl2}_2',
-                                hoverinfo='skip',
-                            ))
-                            _first2 = False
+                                fillcolor='rgba(0,0,0,0)',
+                                layer='above',
+                            )
                 except Exception:
                     pass
             _fig_sow2.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
@@ -2800,7 +2823,7 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             },
                             opacity=0.55,
                         )
-                        # ── Percentile contour lines (rendered on top via go.Scatter paths) ──
+                        # ── Percentile contour lines (add_shape layer='above' → always on top) ──
                         if len(_sow_sc_df) >= 20:
                             import plotly.graph_objects as go
                             import matplotlib
@@ -2816,35 +2839,58 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                                 _yis = np.linspace(_ys.min(), _ys.max(), 200)
                                 _XXs, _YYs = np.meshgrid(_xis, _yis)
                                 _ZZs = _kdes(np.vstack([_XXs.ravel(), _YYs.ravel()])).reshape(_XXs.shape)
-                                _ZZs = _gfs(_ZZs, sigma=3)  # smooth to remove jagged edges
+                                _ZZs = _gfs(_ZZs, sigma=3)
                                 _z_pts_s = _kdes(np.vstack([_xs, _ys]))
                                 for _plbls, _clrs in [
-                                    (90, "#2166ac"),   # blue  — outermost boundary
-                                    (75, "#f4a11d"),   # amber — middle band
-                                    (50, "#c0392b"),   # red   — dense core
+                                    (90, "#2166ac"),   # blue  — outermost (90% of pts inside)
+                                    (50, "#1a9850"),   # green — 50% inside
+                                    (25, "#f4a11d"),   # amber — 25% inside
+                                    (10, "#c0392b"),   # red   — dense core
                                 ]:
                                     _lvls = float(np.percentile(_z_pts_s, 100 - _plbls))
                                     if _lvls <= 0:
                                         continue
+                                    # Dummy trace for legend entry only
+                                    _fig_sow.add_trace(go.Scatter(
+                                        x=[None], y=[None], mode='lines',
+                                        line=dict(color=_clrs, width=2.5),
+                                        name=f'{_plbls}th pct',
+                                        legendgroup=f'pct{_plbls}_s', showlegend=True,
+                                    ))
                                     _mfigs, _maxs = _plts.subplots()
                                     _css = _maxs.contour(_XXs, _YYs, _ZZs, levels=[_lvls])
                                     _plts.close(_mfigs)
-                                    _firsts = True
                                     for _segs in _css.get_paths():
                                         _vertss = _segs.vertices
                                         if len(_vertss) < 5:
                                             continue
-                                        _fig_sow.add_trace(go.Scatter(
-                                            x=np.append(_vertss[:, 0], _vertss[0, 0]),
-                                            y=np.append(_vertss[:, 1], _vertss[0, 1]),
-                                            mode='lines',
+                                        # Open contour at lower-left, extend to both axes
+                                        _myis = int(np.argmin(_vertss[:, 1]))
+                                        _mxis = int(np.argmin(_vertss[:, 0]))
+                                        _ns = len(_vertss)
+                                        _rols = np.roll(_vertss, -_myis, axis=0)
+                                        _nmxs = (_mxis - _myis) % _ns
+                                        _arc_as = _rols[:_nmxs + 1]
+                                        _arc_bs = _rols[_nmxs:]
+                                        if _arc_as.shape[0] < 3 or _arc_bs.shape[0] < 3:
+                                            _opns = _rols
+                                        elif np.mean(_arc_as[:, 0] + _arc_as[:, 1]) >= np.mean(_arc_bs[:, 0] + _arc_bs[:, 1]):
+                                            _opns = _arc_as
+                                        else:
+                                            _opns = _arc_bs
+                                        _ptss = np.vstack([
+                                            [max(float(_opns[0, 0]), 0), 0],
+                                            _opns,
+                                            [0, max(float(_opns[-1, 1]), 0)],
+                                        ])
+                                        _svgs = "M " + " L ".join(f"{float(_px):.4f},{float(_py):.4f}" for _px, _py in _ptss)
+                                        _fig_sow.add_shape(
+                                            type='path', path=_svgs,
+                                            xref='x', yref='y',
                                             line=dict(color=_clrs, width=2.5),
-                                            name=f'{_plbls}th pct',
-                                            showlegend=_firsts,
-                                            legendgroup=f'pct{_plbls}_s',
-                                            hoverinfo='skip',
-                                        ))
-                                        _firsts = False
+                                            fillcolor='rgba(0,0,0,0)',
+                                            layer='above',
+                                        )
                             except Exception:
                                 pass
                         _fig_sow.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
