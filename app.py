@@ -1906,11 +1906,9 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
         # Row 4: Deposits vs IXI scatter (full width, capped at 99th pct)
         _sow_df2 = _d[["amount_deposit_spot_balance", "total_deposits_ixi", "sow"]].dropna() if "total_deposits_ixi" in _d.columns else None
         if _sow_df2 is not None and len(_sow_df2) > 0:
-            _p99_dx = _sow_df2["amount_deposit_spot_balance"].quantile(0.95)
-            _p99_dy = _sow_df2["total_deposits_ixi"].quantile(0.95)
             _sow_df2 = _sow_df2[
-                (_sow_df2["amount_deposit_spot_balance"] <= _p99_dx) &
-                (_sow_df2["total_deposits_ixi"] <= _p99_dy)
+                (_sow_df2["amount_deposit_spot_balance"] <= 200_000) &
+                (_sow_df2["total_deposits_ixi"] <= 1_500_000)
             ]
             _fig_sow2 = px.scatter(
                 _sow_df2, x="amount_deposit_spot_balance", y="total_deposits_ixi",
@@ -1919,6 +1917,8 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 labels={"amount_deposit_spot_balance": "Deposit ($)",
                         "total_deposits_ixi": "IXI ($)", "sow": "SoW"},
                 opacity=0.5)
+            _fig_sow2.update_xaxes(range=[0, 200_000])
+            _fig_sow2.update_yaxes(range=[0, 1_500_000])
             # ── Percentile contour lines (add_shape layer='above' → always on top) ──
             if len(_sow_df2) >= 20:
                 import plotly.graph_objects as go
@@ -2802,11 +2802,9 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                     # ── Row 4: Deposits vs IXI scatter (full width) ───────────
                     _sow_sc_df = _aud[["amount_deposit_spot_balance", "total_deposits_ixi", "sow"]].dropna() if "total_deposits_ixi" in _aud.columns else None
                     if _sow_sc_df is not None and len(_sow_sc_df) > 0:
-                        _p99_sx = _sow_sc_df["amount_deposit_spot_balance"].quantile(0.95)
-                        _p99_sy = _sow_sc_df["total_deposits_ixi"].quantile(0.95)
                         _sow_sc_df = _sow_sc_df[
-                            (_sow_sc_df["amount_deposit_spot_balance"] <= _p99_sx) &
-                            (_sow_sc_df["total_deposits_ixi"] <= _p99_sy)
+                            (_sow_sc_df["amount_deposit_spot_balance"] <= 200_000) &
+                            (_sow_sc_df["total_deposits_ixi"] <= 1_500_000)
                         ]
                         _fig_sow = px.scatter(
                             _sow_sc_df,
@@ -2823,6 +2821,8 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             },
                             opacity=0.55,
                         )
+                        _fig_sow.update_xaxes(range=[0, 200_000])
+                        _fig_sow.update_yaxes(range=[0, 1_500_000])
                         # ── Percentile contour lines (add_shape layer='above' → always on top) ──
                         if len(_sow_sc_df) >= 20:
                             import plotly.graph_objects as go
