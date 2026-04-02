@@ -16,17 +16,14 @@ import plotly.express as px
 import streamlit as st
 import streamlit.components.v1 as components
 
-try:
-    from generate_dummy_data import PRODUCT_COLS, SEGMENT_DESCRIPTIONS, SEGMENT_LABELS
-except ImportError:
-    SEGMENT_LABELS: Dict[str, str] = {}
-    SEGMENT_DESCRIPTIONS: Dict[str, str] = {}
-    PRODUCT_COLS: List[str] = [
-        "Business Line Of Credit", "Cdira", "Checking", "Commercial Loan",
-        "Credit Card", "Escrow", "Standalone Savings", "Home Equity",
-        "Investments", "Loan", "Loan - Personal", "Loc - Personal",
-        "Money Market", "Mortgage", "Odloc", "Other", "Savings",
-    ]
+SEGMENT_LABELS: Dict[str, str] = {}
+SEGMENT_DESCRIPTIONS: Dict[str, str] = {}
+PRODUCT_COLS: List[str] = [
+    "Business Line Of Credit", "Cdira", "Checking", "Commercial Loan",
+    "Credit Card", "Escrow", "Standalone Savings", "Home Equity",
+    "Investments", "Loan", "Loan - Personal", "Loc - Personal",
+    "Money Market", "Mortgage", "Odloc", "Other", "Savings",
+]
 
 # Load real segment data from segment_descriptions.csv (overrides generate_dummy_data values)
 try:
@@ -101,9 +98,9 @@ def _load_audience_profile(b: bytes) -> pd.DataFrame:
     """Load audience_profile.csv from bytes, pre-computing derived columns if not already present."""
     aud = pd.read_csv(io.BytesIO(b))
     today = pd.Timestamp.today().normalize()
-    if "age" not in aud.columns:
+    if "age" not in aud.columns or not pd.api.types.is_numeric_dtype(aud["age"]):
         aud["age"] = (today - pd.to_datetime(aud["date_of_birth"], errors="coerce")).dt.days / 365.25
-    if "tenure_years" not in aud.columns:
+    if "tenure_years" not in aud.columns or not pd.api.types.is_numeric_dtype(aud["tenure_years"]):
         aud["tenure_years"] = (today - pd.to_datetime(aud["date_first_relation"], errors="coerce")).dt.days / 365.25
     if "sow" not in aud.columns:
         aud["sow"] = (aud["amount_deposit_spot_balance"] / aud["total_deposits_ixi"]).clip(0, 1)
@@ -121,11 +118,7 @@ def preprocess(df_raw: pd.DataFrame, date_min: Optional[str], date_max: Optional
     df["end_date"]   = pd.to_datetime(df["end_date"],   errors="coerce")
     df["communication"] = df["communication"].astype(str).str.strip()
     df["contact_flag"]  = pd.to_numeric(df["contact_flag"], errors="coerce").fillna(0).astype(int)
-    # Use explicit control_flag column from data if present; otherwise infer from contact_flag
-    if "control_flag" in df.columns:
-        df["control_flag"] = pd.to_numeric(df["control_flag"], errors="coerce").fillna(0).astype(int)
-    else:
-        df["control_flag"] = (df["contact_flag"] == 0).astype(int)
+    df["control_flag"] = (df["contact_flag"] == 0).astype(int)
     for col in ["start_balance", "end_balance", "start_accounts", "end_accounts"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
@@ -278,10 +271,15 @@ def agg_cols_data(
 
 
 @st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
-def comm_data(df: pd.DataFrame, comm: str) -> pd.DataFrame:
+def comm_data(df: pd.DataFrame, comm: str, combo_treated_keys: Optional[frozenset] = None) -> pd.DataFrame:
     EMPTY = pd.DataFrame(columns=["nsegment", f"{comm}_bal", f"{comm}_bal_ci", f"{comm}_acct", f"{comm}_acct_ci", f"{comm}_n", f"{comm}_lift_bal", f"{comm}_lift_bal_ci", f"{comm}_lift_acct", f"{comm}_lift_acct_ci"])
-    treated = df[(df["contact_flag"] == 1) & (df["communication"] == comm)]
-    control = df[(df["control_flag"] == 1) & (df["communication"] == comm)]
+    if combo_treated_keys is not None:
+        # Combo mode: treatment = customers who received ALL checked comms; control = those who did NOT receive this comm
+        treated = df[(df["alpha_key"].isin(combo_treated_keys)) & (df["communication"] == comm)]
+        control = df[(df["contact_flag"] == 0) & (df["communication"] == comm)]
+    else:
+        treated = df[(df["contact_flag"] == 1) & (df["communication"] == comm)]
+        control = df[(df["control_flag"] == 1) & (df["communication"] == comm)]
     if treated.empty:
         return EMPTY
 
@@ -342,20 +340,26 @@ def build_table(
     all_mode: bool,
     min_n: int,
     bal_baseline_min: Optional[float],
+    combo_treated_keys: Optional[frozenset] = None,
     _ver: int = 2,  # bump to invalidate stale cache
 ) -> pd.DataFrame:
     base = pd.DataFrame({"nsegment": sorted(df["nsegment"].unique())})
-    a = agg_cols_data(df, tuple(ordered_comms), all_mode, bal_baseline_min)
-    tbl = base.merge(a, on="nsegment", how="left")
-    if "agg_n" in tbl.columns:
-        mask = tbl["agg_n"].fillna(0) < min_n
-        for col in ["agg_bal", "agg_bal_ci", "agg_acct", "agg_acct_ci",
-                    "agg_lift_bal", "agg_lift_bal_ci", "agg_lift_acct", "agg_lift_acct_ci"]:
-            if col in tbl.columns:
-                tbl.loc[mask, col] = np.nan
+    if combo_treated_keys is None:
+        # Standard mode: include aggregate column
+        a = agg_cols_data(df, tuple(ordered_comms), all_mode, bal_baseline_min)
+        tbl = base.merge(a, on="nsegment", how="left")
+        if "agg_n" in tbl.columns:
+            mask = tbl["agg_n"].fillna(0) < min_n
+            for col in ["agg_bal", "agg_bal_ci", "agg_acct", "agg_acct_ci",
+                        "agg_lift_bal", "agg_lift_bal_ci", "agg_lift_acct", "agg_lift_acct_ci"]:
+                if col in tbl.columns:
+                    tbl.loc[mask, col] = np.nan
+    else:
+        tbl = base  # combo mode: no aggregate column, per-comm columns only
     # Fetch per-communication stats in parallel
+    # Pass frozenset (hashable) so @st.cache_data can cache comm_data results properly
     with ThreadPoolExecutor() as pool:
-        comm_results = list(pool.map(lambda c: comm_data(df, c), ordered_comms))
+        comm_results = list(pool.map(lambda c: comm_data(df, c, combo_treated_keys), ordered_comms))
     for comm, ca in zip(ordered_comms, comm_results):
         tbl = tbl.merge(ca, on="nsegment", how="left")
         nc = f"{comm}_n"
@@ -534,12 +538,15 @@ def style_tbl(
                     position: sticky; left: 0; z-index: 1;
                     min-width: 90px; padding: 4px 16px 4px 10px; }}
   th.blank {{ background: #262730 !important;
-              position: sticky; left: 0; z-index: 3; min-width: 90px; }}
+              position: sticky; left: 0; z-index: 3; min-width: 90px;
+              cursor: pointer; user-select: none; }}
+  th.blank:hover {{ background: #3a3c4a !important; }}
 </style></head>
 <body><div style="overflow:auto; max-height: 615px;">
 {table_html}
 </div><script>
 (function(){{
+  // Sort by data columns
   var ths = document.querySelectorAll('thead tr th:not(.blank)');
   var dir = {{}};
   ths.forEach(function(th, idx) {{
@@ -559,6 +566,24 @@ def style_tbl(
       rows.forEach(function(r){{ tbody.appendChild(r); }});
     }});
   }});
+  // Sort by index column (th.blank click)
+  var blankTh = document.querySelector('thead tr th.blank');
+  var idxDir = false;
+  if (blankTh) {{
+    blankTh.addEventListener('click', function() {{
+      idxDir = !idxDir;
+      var tbody = document.querySelector('tbody');
+      var rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort(function(a, b) {{
+        var av = (a.querySelector('th.row_heading') || {{innerText:''}}).innerText.trim();
+        var bv = (b.querySelector('th.row_heading') || {{innerText:''}}).innerText.trim();
+        var an = parseFloat(av), bn = parseFloat(bv);
+        if (!isNaN(an) && !isNaN(bn)) return idxDir ? an-bn : bn-an;
+        return idxDir ? av.localeCompare(bv) : bv.localeCompare(av);
+      }});
+      rows.forEach(function(r){{ tbody.appendChild(r); }});
+    }});
+  }}
 }})();
 (function(){{
   var tt=document.createElement('div');
@@ -695,6 +720,27 @@ def _styled_html_table(
     el.addEventListener('mousemove', function(e){{tt.style.left=(e.clientX+14)+'px';tt.style.top=(e.clientY+14)+'px';}});
     el.addEventListener('mouseleave',function(){{tt.style.display='none';}});
   }});
+}})();
+(function(){{
+  // Truncate long text cells in the Description column with ellipsis + title tooltip
+  var ths = document.querySelectorAll('thead th');
+  var descIdx = -1;
+  for (var i = 0; i < ths.length; i++) {{
+    if (ths[i].innerText.trim() === 'Description') {{ descIdx = i - 1; break; }}
+  }}
+  if (descIdx < 0) return;
+  document.querySelectorAll('tbody tr').forEach(function(tr) {{
+    var tds = tr.querySelectorAll('td');
+    if (descIdx < tds.length) {{
+      var td = tds[descIdx];
+      td.style.maxWidth = '260px';
+      td.style.overflow = 'hidden';
+      td.style.textOverflow = 'ellipsis';
+      td.style.whiteSpace = 'nowrap';
+      var text = td.innerText.trim();
+      if (text) td.title = text;
+    }}
+  }});
 }})();</script>
 </body></html>"""
 
@@ -731,33 +777,37 @@ def _build_sim_excel(
     summary_df: pd.DataFrame,
     ordered_comms: List[str],
     metric_lbl: str,   # e.g. " Bal%" or " Acct%"
+    include_lift: bool = True,
+    include_n: bool = True,
+    include_prop: bool = False,
+    include_summary: bool = True,
+    selected_comms: Optional[List[str]] = None,   # None = all comms
 ) -> bytes:
     """Build a richly formatted Excel for the Audience Simulator download."""
     buf = io.BytesIO()
 
+    # Apply communication filter
+    _comms = [c for c in ordered_comms if selected_comms is None or c in selected_comms]
+
     # Build export df: fixed cols + interleaved [Lift%, N, Prop%] per comm
     bk = dl_detail.copy()
-    # Ensure N columns are absolute integers (undo any proportion conversion)
-    for _c in ordered_comms:
-        _nc = f"{_c} N"
-        if _nc in bk.columns and bk[_nc].max() <= 1.0:
-            # looks like proportions — can't safely recover; leave as-is
-            pass
 
     export_cols_ordered: List[str] = [
         c for c in ["Role", "Label", "Description"] if c in bk.columns
     ]
-    for _c in ordered_comms:
+    for _c in _comms:
         _lc = f"{_c}{metric_lbl}"
         _nc = f"{_c} N"
         _pc = f"{_c} Prop%"
-        if _lc in bk.columns:
+        if include_lift and _lc in bk.columns:
             export_cols_ordered.append(_lc)
         if _nc in bk.columns:
             _total = bk[_nc].sum()
             bk[_pc] = (bk[_nc] / _total) if _total > 0 else np.nan
-            export_cols_ordered.append(_nc)
-            export_cols_ordered.append(_pc)
+            if include_n:
+                export_cols_ordered.append(_nc)
+            if include_prop:
+                export_cols_ordered.append(_pc)
     bk = bk[[c for c in export_cols_ordered if c in bk.columns]]
 
     with pd.ExcelWriter(buf, engine="xlsxwriter") as _ew:
@@ -856,36 +906,37 @@ def _build_sim_excel(
         ws.autofilter(0, 0, nrows, len(all_cols))
 
         # ── Summary sheet ─────────────────────────────────────────────────────
-        ws2 = wb.add_worksheet("Summary")
-        _ew.sheets["Summary"] = ws2
-        _sum_cols = [c for c in ["Communication", "Expected Lift", "Comm Users",
-                                  "Projected Bal \u20ac", "Proj. Accounts"] if c in summary_df.columns]
-        ws2.set_row(0, 30)
-        for _ci, _col in enumerate(_sum_cols):
-            ws2.write(0, _ci, _col, _hdr)
-        _comm_fmt = wb.add_format({"bold": True, "border": 1})
-        for _ri, _row in summary_df[_sum_cols].iterrows():
+        if include_summary and len(summary_df) > 0:
+            ws2 = wb.add_worksheet("Summary")
+            _ew.sheets["Summary"] = ws2
+            _sum_cols = [c for c in ["Communication", "Expected Lift", "Comm Users",
+                                      "Projected Bal \u20ac", "Proj. Accounts"] if c in summary_df.columns]
+            ws2.set_row(0, 30)
             for _ci, _col in enumerate(_sum_cols):
-                _v = _row[_col]
-                if _col == "Communication":
-                    ws2.write(_ri + 1, _ci, _v, _comm_fmt)
-                elif _col == "Expected Lift":
-                    ws2.write(_ri + 1, _ci, float(_v) if pd.notna(_v) else "", _pct)
-                elif _col in ("Comm Users", "Proj. Accounts"):
-                    ws2.write(_ri + 1, _ci, int(_v) if pd.notna(_v) else "", _nfmt)
-                elif _col == "Projected Bal \u20ac":
-                    ws2.write(_ri + 1, _ci, float(_v) if pd.notna(_v) else "", _eur)
-        if len(summary_df) > 0 and "Expected Lift" in _sum_cols:
-            _lci = _sum_cols.index("Expected Lift")
-            ws2.conditional_format(1, _lci, len(summary_df), _lci, {
-                "type": "3_color_scale",
-                "min_color": "#F8696B", "mid_color": "#FFEB84", "max_color": "#63BE7B",
-            })
-        _w2 = {"Communication": 16, "Expected Lift": 14, "Comm Users": 14,
-               "Projected Bal \u20ac": 20, "Proj. Accounts": 16}
-        for _ci, _col in enumerate(_sum_cols):
-            ws2.set_column(_ci, _ci, _w2.get(_col, 14))
-        ws2.freeze_panes(1, 0)
+                ws2.write(0, _ci, _col, _hdr)
+            _comm_fmt = wb.add_format({"bold": True, "border": 1})
+            for _ri, _row in summary_df[_sum_cols].iterrows():
+                for _ci, _col in enumerate(_sum_cols):
+                    _v = _row[_col]
+                    if _col == "Communication":
+                        ws2.write(_ri + 1, _ci, _v, _comm_fmt)
+                    elif _col == "Expected Lift":
+                        ws2.write(_ri + 1, _ci, float(_v) if pd.notna(_v) else "", _pct)
+                    elif _col in ("Comm Users", "Proj. Accounts"):
+                        ws2.write(_ri + 1, _ci, int(_v) if pd.notna(_v) else "", _nfmt)
+                    elif _col == "Projected Bal \u20ac":
+                        ws2.write(_ri + 1, _ci, float(_v) if pd.notna(_v) else "", _eur)
+            if len(summary_df) > 0 and "Expected Lift" in _sum_cols:
+                _lci = _sum_cols.index("Expected Lift")
+                ws2.conditional_format(1, _lci, len(summary_df), _lci, {
+                    "type": "3_color_scale",
+                    "min_color": "#F8696B", "mid_color": "#FFEB84", "max_color": "#63BE7B",
+                })
+            _w2 = {"Communication": 16, "Expected Lift": 14, "Comm Users": 14,
+                   "Projected Bal \u20ac": 20, "Proj. Accounts": 16}
+            for _ci, _col in enumerate(_sum_cols):
+                ws2.set_column(_ci, _ci, _w2.get(_col, 14))
+            ws2.freeze_panes(1, 0)
 
     buf.seek(0)
     return buf.read()
@@ -961,6 +1012,53 @@ def build_pptx(tbl: pd.DataFrame, ordered_comms: List[str]) -> bytes:
     return buf.getvalue()
 
 
+# ── Excel export dialog ───────────────────────────────────────────────────────
+@st.dialog("Export to Excel")
+def _sim_excel_dialog(
+    dl_detail: pd.DataFrame,
+    summary_df: pd.DataFrame,
+    ordered_comms: list,
+    metric_lbl: str,
+) -> None:
+    """Modal dialog: choose which communications and column types to export."""
+    st.markdown("**Communications to include:**")
+    _sel_comms = [
+        c for c in ordered_comms
+        if st.checkbox(c, value=True, key=f"_xldlg_{c}")
+    ]
+    if not _sel_comms:
+        st.warning("Select at least one communication.")
+        return
+
+    st.markdown("---")
+    st.markdown("**Column types:**")
+    _c1, _c2, _c3 = st.columns(3)
+    inc_lift    = _c1.checkbox("Lift%",       value=True,  key="_xldlg_lift")
+    inc_n       = _c2.checkbox("N (treated)", value=True,  key="_xldlg_n")
+    inc_prop    = _c3.checkbox("Pop %",       value=False, key="_xldlg_prop")
+    inc_summary = st.checkbox("Include Summary sheet", value=True, key="_xldlg_sum")
+
+    if not inc_lift and not inc_n and not inc_prop:
+        st.warning("Select at least one column type.")
+        return
+
+    _bytes = _build_sim_excel(
+        dl_detail, summary_df, ordered_comms, metric_lbl,
+        include_lift=inc_lift,
+        include_n=inc_n,
+        include_prop=inc_prop,
+        include_summary=inc_summary,
+        selected_comms=_sel_comms,
+    )
+    st.download_button(
+        "Download",
+        _bytes,
+        file_name="targeting_selection.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(page_title="Affinity Explorer", layout="wide")
 
@@ -986,7 +1084,7 @@ try:
         raw_bytes = f.read()
     df_raw = _load_csv(raw_bytes)
 except FileNotFoundError:
-    st.error("data.csv not found — run `python generate_dummy_data.py` first.")
+    st.error("data.csv not found — please upload or provide a data.csv file.")
     st.stop()
 
 # ── Load audience profile (demographics) ─────────────────────────────────────
@@ -1026,8 +1124,23 @@ with st.sidebar:
         all_mode = False
         min_n = _MIN_N_DEFAULT  # 30 — segments with fewer treated customers are hidden
         bal_clip_pct = 5  # clip below 5th and above 95th percentile (hardcoded)
-        st.caption("Outlier clipping: bottom and top 5% of balance changes are removed before aggregation.")
         bal_baseline_min = 25.0  # exclude segments whose avg starting balance is below €25
+        st.caption(
+            "**Minimum N** — segments with fewer than 30 treated customers are hidden from "
+            "the table. Too few observations make the mean unreliable and the CI very wide. "
+            "Value: **30 customers**."
+        )
+        st.caption(
+            "**Outlier clipping** — the bottom 5% and top 5% of `balance_pct_change` values "
+            "are removed *before* computing any means or lifts. This prevents a handful of "
+            "extreme balance swings (e.g. account closures, large one-off transfers) from "
+            "distorting the segment averages."
+        )
+        st.caption(
+            "**Baseline balance filter** — segments whose average *starting* balance across "
+            "treated customers is below **$25** are excluded. These are near-zero balance "
+            "accounts where % change is noisy and economically meaningless."
+        )
 
     # Show columns — metric toggle lives inside the Data tab (see tab_table section)
     show_n_cols     = False
@@ -1119,7 +1232,7 @@ with tab_explorer:
             coloraxis_showscale=False, height=360,
             yaxis_range=[0, int(_grp_sz["Segments"].max()) * 1.20],
         )
-        st.plotly_chart(_fig_gsz, use_container_width=True)
+        st.plotly_chart(_fig_gsz, width='stretch')
 
         _fig_gus = px.bar(
             _grp_sz, x="Group", y="Customers",
@@ -1133,7 +1246,7 @@ with tab_explorer:
             coloraxis_showscale=False, height=360,
             yaxis_range=[0, int(_grp_sz["Customers"].max()) * 1.20],
         )
-        st.plotly_chart(_fig_gus, use_container_width=True)
+        st.plotly_chart(_fig_gus, width='stretch')
 
 
 # ══════════════════════════════════════════════════════════
@@ -1156,7 +1269,19 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
 **Colour scale**: Red = negative, Yellow = near zero, Green = positive. Scale is relative to the visible data range.
 
 **Blank cells** = fewer customers than the minimum-N filter, or no data for that combination.  
-**Click any column header** to sort the table by that metric.
+**Click any column header** to sort. To reset to default order, reload the page (F5).
+
+---
+
+**Communication checkboxes — standard mode (all unchecked)**  
+Treatment = customers with `contact_flag=1` for that communication.  
+Control = customers with `contact_flag=0` for that communication.  
+Each column is independent. Confounding is possible if customers receive multiple communications that influence each other.
+
+**Communication checkboxes — combo mode (one or more checked)**  
+Treatment = customers with `contact_flag=1` for **all** checked communications.  
+Control = customers with `contact_flag=0` for each respective communication.  
+This answers: "Is receiving this specific combination of touch-points statistically significant vs receiving none of them?" It reduces journey confounding because you are comparing a tightly defined treatment group against a clean non-contacted baseline.
         """)
     # ── Metric toggle ─────────────────────────────────────────────────────────
     _metric_opts = ["Balance & Accounts", "Balance only", "Accounts only"]
@@ -1174,7 +1299,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
     _n_pc = len(_all_present_comms)
     _row1 = st.columns(_n_pc + 2)
     for _i, _c in enumerate(_all_present_comms):
-        _row1[_i].checkbox(_c, value=True, key=f"cb_{_c}")
+        _row1[_i].checkbox(_c, value=False, key=f"cb_{_c}")
     show_n_cols = _row1[_n_pc].checkbox("Show N", value=False, key="show_n_cols")
     show_lift = _row1[_n_pc + 1].checkbox(
         "Show lift",
@@ -1184,14 +1309,26 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
              "Positive = the communication added value beyond background trends. "
              "Enable this to see whether the % change is *caused by* the communication, not just correlated.",
     )
-    ordered_comms = [c for c in _all_present_comms if st.session_state.get(f"cb_{c}", True)]
-    if not ordered_comms:
-        ordered_comms = _all_present_comms[:]
 
-    # ── Row 2 placeholder (Show columns moved to sidebar Advanced filters) ────
+    # ── Combo mode vs standard mode ──────────────────────────────────────────
+    _checked_comms = [c for c in _all_present_comms if st.session_state.get(f"cb_{c}", False)]
+    _combo_mode = len(_checked_comms) > 0
+    if _combo_mode:
+        _per_comm_t = {c: set(df[(df["contact_flag"] == 1) & (df["communication"] == c)]["alpha_key"]) for c in _checked_comms}
+        _combo_treated_keys = frozenset(set.intersection(*_per_comm_t.values())) if _per_comm_t else frozenset()
+        ordered_comms = _checked_comms
+        st.caption(
+            f"Combo mode — treatment: **{len(_combo_treated_keys):,}** customers who received all of: "
+            f"{', '.join(_checked_comms)}. Control: `contact_flag=0` per communication."
+        )
+    else:
+        _combo_treated_keys = None
+        ordered_comms = _all_present_comms[:]
+        st.caption("Standard mode — check one or more communication boxes above to activate combo mode.")
 
     with st.spinner("Computing..."):
-        tbl = build_table(df, ordered_comms, all_mode, min_n, bal_baseline_min, _ver=2)
+        tbl = build_table(df, ordered_comms, all_mode, min_n, bal_baseline_min,
+                          combo_treated_keys=_combo_treated_keys, _ver=2)
 
     if tbl.empty:
         # Show diagnostic info so user knows exactly why nothing appears
@@ -1271,7 +1408,7 @@ Strong colour = statistically significant (95% CI does not cross zero). Muted = 
                     yaxis=dict(color="#ccc"),
                     font=dict(color="#fafafa"),
                 )
-                st.plotly_chart(_fig_ci, use_container_width=True)
+                st.plotly_chart(_fig_ci, width='stretch')
 
         # ── Recommended Audiences ────────────────────────────────────────────
         st.divider()
@@ -1647,7 +1784,143 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 _and_note = f", {len(_and_idx)} mandatory AND" if _and_idx else ""
                 st.success(f"Sent {len(_ra_shown_segs)} segment{'s' if len(_ra_shown_segs) != 1 else ''} to the Audience Simulator{_and_note} (+ {len(_ra_bot_segs)} excluded).")
 
+    # ── Audience Demographics (all customers in audience_profile.csv) ─────────
+    if _aud_df is not None and len(_aud_df) > 0:
+        st.divider()
+        st.subheader("Audience Demographics — All Customers")
+        st.caption(f"{len(_aud_df):,} customers in audience_profile.csv")
+        import plotly.graph_objects as go
+        from scipy.stats import gaussian_kde as _gkde_dt
 
+        def _kde_dt(series, nbins, line_color):
+            _v = series.dropna().values
+            if len(_v) < 5:
+                return None
+            _, _edges = np.histogram(_v, bins=nbins)
+            _bw = _edges[1] - _edges[0]
+            _fn = _gkde_dt(_v)
+            _xs = np.linspace(_v.min(), _v.max(), 300)
+            _ys = _fn(_xs) * len(_v) * _bw
+            return go.Scatter(x=_xs, y=_ys, mode="lines",
+                              line=dict(color=line_color, width=2.5),
+                              showlegend=False, name="")
+
+        _d = _aud_df.copy()
+
+        # Row 1: Age + Gender
+        _d1, _d2 = st.columns([3, 2])
+        with _d1:
+            _age_bins2   = [18, 25, 35, 45, 55, 65, 75, 120]
+            _age_labels2 = ["18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"]
+            _d["_age_group2"] = pd.cut(_d["age"], bins=_age_bins2, labels=_age_labels2, right=False)
+            _age_dist2 = (_d["_age_group2"].value_counts().reindex(_age_labels2).fillna(0).reset_index())
+            _age_dist2.columns = ["Age group", "Customers"]
+            _fig_age2 = px.bar(_age_dist2, x="Age group", y="Customers",
+                               title="Age Distribution", color="Customers",
+                               color_continuous_scale="Blues")
+            _fig_age2.add_scatter(x=_age_dist2["Age group"], y=_age_dist2["Customers"],
+                                  mode="lines+markers",
+                                  line=dict(color="#103060", width=2, shape="spline", smoothing=1.0),
+                                  marker=dict(size=6, color="#103060"), showlegend=False, name="")
+            _fig_age2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
+                                    coloraxis_showscale=False, showlegend=False)
+            st.plotly_chart(_fig_age2, width='stretch')
+        with _d2:
+            _gender_counts2 = _d["gender"].fillna("Missing").value_counts().reset_index()
+            _gender_counts2.columns = ["Gender", "Count"]
+            _g_cmap2 = {"Male": "#89C4E1", "Female": "#FFB7C5", "Missing": "#CCCCCC"}
+            _fig_gender2 = go.Figure(go.Pie(
+                labels=_gender_counts2["Gender"], values=_gender_counts2["Count"],
+                hole=0.4,
+                marker=dict(colors=[_g_cmap2.get(g, "#DDDDDD") for g in _gender_counts2["Gender"]]),
+                textinfo="percent+label"))
+            _fig_gender2.update_layout(title=dict(text="Gender"), height=300,
+                                       margin=dict(l=20, r=20, t=50, b=30))
+            st.plotly_chart(_fig_gender2, width='stretch')
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Row 2: Tenure + Deposit + Top 10 States
+        _d3, _d4, _d5 = st.columns(3)
+        with _d3:
+            _fig_ten2 = px.histogram(_d, x="tenure_years", nbins=20, title="Tenure Distribution",
+                                     labels={"tenure_years": "Tenure (years)"},
+                                     color_discrete_sequence=["#4C9BE8"])
+            _k2 = _kde_dt(_d["tenure_years"], 20, "#1a3a6b")
+            if _k2:
+                _fig_ten2.add_trace(_k2)
+            _fig_ten2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
+            st.plotly_chart(_fig_ten2, width='stretch')
+        with _d4:
+            _fig_dep2 = px.histogram(_d, x="amount_deposit_spot_balance", nbins=25, title="Deposit Balance",
+                                     labels={"amount_deposit_spot_balance": "Balance ($)"},
+                                     color_discrete_sequence=["#F4A261"])
+            _k3 = _kde_dt(_d["amount_deposit_spot_balance"], 25, "#7a3100")
+            if _k3:
+                _fig_dep2.add_trace(_k3)
+            _fig_dep2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
+            st.plotly_chart(_fig_dep2, width='stretch')
+        with _d5:
+            _state_cnt2 = _d["state"].value_counts().head(10).reset_index()
+            _state_cnt2.columns = ["State", "Customers"]
+            _fig_state2 = px.bar(_state_cnt2, x="Customers", y="State", orientation="h",
+                                 title="Top 10 States", color="Customers", color_continuous_scale="Teal")
+            _fig_state2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
+                                      coloraxis_showscale=False,
+                                      yaxis=dict(categoryorder="total ascending"))
+            st.plotly_chart(_fig_state2, width='stretch')
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Row 3: Product ownership rates + # products held
+        _d6, _d7 = st.columns(2)
+        with _d6:
+            _prod_cols_dt = [c for c in PRODUCT_COLS if c in _d.columns]
+            if _prod_cols_dt:
+                _prod_rates2 = ((_d[_prod_cols_dt].mean() * 100).sort_values(ascending=True).reset_index())
+                _prod_rates2.columns = ["Product", "% with product"]
+                _fig_prods2 = px.bar(_prod_rates2, x="% with product", y="Product", orientation="h",
+                                     title="Product Ownership Rates", color="% with product",
+                                     color_continuous_scale="Purpor",
+                                     text=_prod_rates2["% with product"].map(lambda v: f"{v:.1f}%"))
+                _fig_prods2.update_traces(textposition="outside")
+                _fig_prods2.update_layout(height=340, margin=dict(l=20, r=80, t=40, b=20),
+                                          coloraxis_showscale=False,
+                                          xaxis=dict(ticksuffix="%", range=[0, 100]))
+                st.plotly_chart(_fig_prods2, width='stretch')
+        with _d7:
+            _nprod_cnt2 = _d["n_products"].value_counts().sort_index().reset_index()
+            _nprod_cnt2.columns = ["Products", "Customers"]
+            _fig_np2 = px.bar(_nprod_cnt2, x="Products", y="Customers", title="# Products Held",
+                               color="Customers", color_continuous_scale="YlOrRd")
+            _fig_np2.add_scatter(x=_nprod_cnt2["Products"], y=_nprod_cnt2["Customers"],
+                                  mode="lines+markers",
+                                  line=dict(color="#5a0000", width=2, shape="spline", smoothing=0.8),
+                                  marker=dict(size=6, color="#5a0000"), showlegend=False, name="")
+            _fig_np2.update_layout(height=340, margin=dict(l=20, r=20, t=50, b=30),
+                                    coloraxis_showscale=False)
+            st.plotly_chart(_fig_np2, width='stretch')
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # Row 4: Deposits vs IXI scatter (full width, capped at 99th pct)
+        _sow_df2 = _d[["amount_deposit_spot_balance", "total_deposits_ixi", "sow"]].dropna() if "total_deposits_ixi" in _d.columns else None
+        if _sow_df2 is not None and len(_sow_df2) > 0:
+            _p99_dx = _sow_df2["amount_deposit_spot_balance"].quantile(0.95)
+            _p99_dy = _sow_df2["total_deposits_ixi"].quantile(0.95)
+            _sow_df2 = _sow_df2[
+                (_sow_df2["amount_deposit_spot_balance"] <= _p99_dx) &
+                (_sow_df2["total_deposits_ixi"] <= _p99_dy)
+            ]
+            _fig_sow2 = px.scatter(
+                _sow_df2, x="amount_deposit_spot_balance", y="total_deposits_ixi",
+                color="sow", color_continuous_scale="RdYlGn", range_color=[0, 1],
+                title="Deposits vs IXI — capped at 95th percentile (coloured by SoW)",
+                labels={"amount_deposit_spot_balance": "Deposit ($)",
+                        "total_deposits_ixi": "IXI ($)", "sow": "SoW"},
+                opacity=0.5)
+            _fig_sow2.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30))
+            st.plotly_chart(_fig_sow2, width='stretch')
 
 
 # ══════════════════════════════════════════════════════════
@@ -1723,7 +1996,7 @@ with tab_charts:
             )
             fig_hm.update_xaxes(type="category")
             fig_hm.update_layout(height=max(420, len(hm) * 14 + 100))
-            st.plotly_chart(fig_hm, use_container_width=True)
+            st.plotly_chart(fig_hm, width='stretch')
 
         st.divider()
 
@@ -1779,7 +2052,7 @@ with tab_charts:
                 )
                 fig_jt.update_yaxes(tickformat=".1%")
                 fig_jt.update_layout(height=450)
-                st.plotly_chart(fig_jt, use_container_width=True)
+                st.plotly_chart(fig_jt, width='stretch')
             else:
                 st.info("No journey data for selected segments.")
 
@@ -1840,8 +2113,9 @@ with tab_charts:
             cooc_norm_df.columns = [str(s) for s in cooc_segs]
             # Sort rows by max off-diagonal co-occurrence (highest overlap at top)
             _off_diag = cooc_norm_df.copy()
-            np.fill_diagonal(_off_diag.values, 0)
-            _row_order = _off_diag.max(axis=1).sort_values(ascending=False).index.tolist()
+            _off_diag_arr = _off_diag.to_numpy().copy()
+            np.fill_diagonal(_off_diag_arr, 0)
+            _row_order = pd.Series(_off_diag_arr.max(axis=1), index=_off_diag.index).sort_values(ascending=False).index.tolist()
             cooc_norm_df = cooc_norm_df.loc[_row_order, _row_order]
             fig_cooc = px.imshow(
                 cooc_norm_df,
@@ -1854,7 +2128,7 @@ with tab_charts:
             fig_cooc.update_xaxes(type="category")
             fig_cooc.update_yaxes(type="category", autorange="reversed")
             fig_cooc.update_layout(height=600)
-            st.plotly_chart(fig_cooc, use_container_width=True)
+            st.plotly_chart(fig_cooc, width='stretch')
             st.caption(
                 "**How to read**: cell [A, B] = fraction of segment A users who are also in segment B. "
                 "High values (dark blue) mean heavy overlap — avoid targeting both segments simultaneously."
@@ -1901,7 +2175,7 @@ with tab_charts:
                         fig_dist = ff.create_distplot(list(gv), list(lv), show_hist=False, show_rug=False, colors=_colors)
                         fig_dist.update_xaxes(tickformat=".0%" if metric_col == "balance_pct_change" else ".2f", title=dist_metric)
                         fig_dist.update_layout(height=480, title=f"{dist_metric} — KDE density by segment")
-                        st.plotly_chart(fig_dist, use_container_width=True)
+                        st.plotly_chart(fig_dist, width='stretch')
                         drawn = True
                 except Exception:
                     pass
@@ -1915,7 +2189,7 @@ with tab_charts:
                     if metric_col == "balance_pct_change":
                         fig_dist.update_xaxes(tickformat=".0%")
                     fig_dist.update_layout(height=480)
-                    st.plotly_chart(fig_dist, use_container_width=True)
+                    st.plotly_chart(fig_dist, width='stretch')
 
 
 # ══════════════════════════════════════════════════════════
@@ -2243,30 +2517,22 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
             _dl_detail.insert(0, "Description", [SEGMENT_DESCRIPTIONS.get(str(s), "") for s in _dl_detail.index])
             _dl_detail.insert(0, "Label", [SEGMENT_LABELS.get(str(s), "") for s in _dl_detail.index])
             _dl_detail.index.name = "nsegment"
-            _exp_buf = io.BytesIO()
-            _exp_buf.write(_build_sim_excel(_dl_detail, sim_summary, ordered_comms, _metric_lbl))
-            _exp_buf.seek(0)
             st.markdown(
                 '<style>div:has(>#_dl_anchor)+div[data-testid="element-container"]'
                 '{margin-top:-16px!important}</style><div id="_dl_anchor"></div>',
                 unsafe_allow_html=True,
             )
             _, _dl_col, _ = st.columns([2, 2, 2])
-            _dl_col.download_button(
-                "Download Excel (.xlsx)",
-                _exp_buf.read(),
-                file_name="targeting_selection.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-                help="Exports two sheets: 'Breakdown' (per-segment lift & N with Role) and 'Summary' (projected metrics per communication).",
-            )
+            if _dl_col.button("Download Excel (.xlsx)", use_container_width=True,
+                               help="Opens a column selector before downloading."):
+                _sim_excel_dialog(_dl_detail, sim_summary, ordered_comms, _metric_lbl)
             # ── Audience Profile ──────────────────────────────────────────────────────
             st.markdown("---")
             st.markdown("#### Audience Profile")
             if _aud_df is None:
                 st.info(
                     "No audience profile data found. "
-                    "Run `python generate_dummy_data.py` to generate `audience_profile.csv`."
+                    "Please provide an `audience_profile.csv` file."
                 )
             else:
                 # Resolve final user set: users in the selected (OR+AND) segments minus NOT
@@ -2343,7 +2609,7 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             height=300, margin=dict(l=20, r=20, t=50, b=30),
                             coloraxis_showscale=False, showlegend=False,
                         )
-                        st.plotly_chart(_fig_age, use_container_width=True)
+                        st.plotly_chart(_fig_age, width='stretch')
                     with _ac2:
                         _gender_vals = _aud["gender"].fillna("Missing")
                         _gender_counts = _gender_vals.value_counts().reset_index()
@@ -2363,11 +2629,11 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             legend=dict(orientation="v", yanchor="middle", y=0.5),
                             showlegend=True,
                         )
-                        st.plotly_chart(_fig_gender, use_container_width=True)
+                        st.plotly_chart(_fig_gender, width='stretch')
 
                     st.markdown("<br>", unsafe_allow_html=True)
 
-                    # ── Row 2: Tenure + Deposit Balance + Share of Wallet ─────
+                    # ── Row 2: Tenure + Deposit Balance + Top 10 States ──────
                     _ac3, _ac4, _ac5 = st.columns(3)
                     with _ac3:
                         _fig_ten = px.histogram(
@@ -2380,7 +2646,7 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                         if _kde_ten:
                             _fig_ten.add_trace(_kde_ten)
                         _fig_ten.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
-                        st.plotly_chart(_fig_ten, use_container_width=True)
+                        st.plotly_chart(_fig_ten, width='stretch')
                     with _ac4:
                         _fig_dep = px.histogram(
                             _aud, x="amount_deposit_spot_balance", nbins=25,
@@ -2392,29 +2658,9 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                         if _kde_dep:
                             _fig_dep.add_trace(_kde_dep)
                         _fig_dep.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
-                        st.plotly_chart(_fig_dep, use_container_width=True)
+                        st.plotly_chart(_fig_dep, width='stretch')
                     with _ac5:
-                        _fig_sow = px.histogram(
-                            _aud, x="sow", nbins=20,
-                            title="Share of Wallet  (deposit ÷ net worth)",
-                            labels={"sow": "SoW"},
-                            color_discrete_sequence=["#68B984"],
-                        )
-                        _kde_sow = _kde_trace(_aud["sow"], 20, "#68B984", "#1a4d2e")
-                        if _kde_sow:
-                            _fig_sow.add_trace(_kde_sow)
-                        _fig_sow.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
-                        st.plotly_chart(_fig_sow, use_container_width=True)
-
-                    st.markdown("<br>", unsafe_allow_html=True)
-
-                    # ── Row 3: Top states + # products held ──────────────────
-                    _ac6, _ac7 = st.columns(2)
-                    with _ac6:
-                        _state_cnt = (
-                            _aud["state"].value_counts().head(10)
-                            .reset_index()
-                        )
+                        _state_cnt = _aud["state"].value_counts().head(10).reset_index()
                         _state_cnt.columns = ["State", "Customers"]
                         _fig_state = px.bar(
                             _state_cnt, x="Customers", y="State",
@@ -2422,11 +2668,39 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             color="Customers", color_continuous_scale="Teal",
                         )
                         _fig_state.update_layout(
-                            height=340, margin=dict(l=20, r=20, t=50, b=30),
+                            height=300, margin=dict(l=20, r=20, t=50, b=30),
                             coloraxis_showscale=False,
                             yaxis=dict(categoryorder="total ascending"),
                         )
-                        st.plotly_chart(_fig_state, use_container_width=True)
+                        st.plotly_chart(_fig_state, width='stretch')
+
+                    st.markdown("<br>", unsafe_allow_html=True)
+
+                    # ── Row 3: Product ownership rates + # products held ──────
+                    _ac6, _ac7 = st.columns(2)
+                    with _ac6:
+                        _prod_cols_present = [c for c in PRODUCT_COLS if c in _aud.columns]
+                        if _prod_cols_present:
+                            _prod_rates = (
+                                (_aud[_prod_cols_present].mean() * 100)
+                                .sort_values(ascending=True)
+                                .reset_index()
+                            )
+                            _prod_rates.columns = ["Product", "% with product"]
+                            _fig_prods = px.bar(
+                                _prod_rates, x="% with product", y="Product",
+                                orientation="h",
+                                title="Product Ownership Rates",
+                                color="% with product", color_continuous_scale="Purpor",
+                                text=_prod_rates["% with product"].map(lambda v: f"{v:.1f}%"),
+                            )
+                            _fig_prods.update_traces(textposition="outside")
+                            _fig_prods.update_layout(
+                                height=340, margin=dict(l=20, r=80, t=40, b=20),
+                                coloraxis_showscale=False,
+                                xaxis=dict(ticksuffix="%", range=[0, 100]),
+                            )
+                            st.plotly_chart(_fig_prods, width='stretch')
                     with _ac7:
                         _nprod_cnt = (
                             _aud["n_products"].value_counts().sort_index()
@@ -2449,34 +2723,36 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             height=340, margin=dict(l=20, r=20, t=50, b=30),
                             coloraxis_showscale=False,
                         )
-                        st.plotly_chart(_fig_np, use_container_width=True)
+                        st.plotly_chart(_fig_np, width='stretch')
 
                     st.markdown("<br>", unsafe_allow_html=True)
 
-                    # ── Row 4: Product ownership rates (full width) ───────────
-                    _prod_cols_present = [c for c in PRODUCT_COLS if c in _aud.columns]
-                    if _prod_cols_present:
-                        _prod_rates = (
-                            (_aud[_prod_cols_present].mean() * 100)
-                            .sort_values(ascending=True)
-                            .reset_index()
+                    # ── Row 4: Deposits vs IXI scatter (full width) ───────────
+                    _sow_sc_df = _aud[["amount_deposit_spot_balance", "total_deposits_ixi", "sow"]].dropna() if "total_deposits_ixi" in _aud.columns else None
+                    if _sow_sc_df is not None and len(_sow_sc_df) > 0:
+                        _p99_sx = _sow_sc_df["amount_deposit_spot_balance"].quantile(0.95)
+                        _p99_sy = _sow_sc_df["total_deposits_ixi"].quantile(0.95)
+                        _sow_sc_df = _sow_sc_df[
+                            (_sow_sc_df["amount_deposit_spot_balance"] <= _p99_sx) &
+                            (_sow_sc_df["total_deposits_ixi"] <= _p99_sy)
+                        ]
+                        _fig_sow = px.scatter(
+                            _sow_sc_df,
+                            x="amount_deposit_spot_balance",
+                            y="total_deposits_ixi",
+                            color="sow",
+                            color_continuous_scale="RdYlGn",
+                            range_color=[0, 1],
+                            title="Deposits vs IXI — capped at 95th percentile (coloured by SoW)",
+                            labels={
+                                "amount_deposit_spot_balance": "Deposit ($)",
+                                "total_deposits_ixi": "IXI ($)",
+                                "sow": "SoW",
+                            },
+                            opacity=0.55,
                         )
-                        _prod_rates.columns = ["Product", "% with product"]
-                        _fig_prods = px.bar(
-                            _prod_rates, x="% with product", y="Product",
-                            orientation="h",
-                            title="Product Ownership Rates",
-                            color="% with product", color_continuous_scale="Purpor",
-                            text=_prod_rates["% with product"].map(lambda v: f"{v:.1f}%"),
-                        )
-                        _fig_prods.update_traces(textposition="outside")
-                        _fig_prods.update_layout(
-                            height=max(320, 26 * len(_prod_cols_present) + 80),
-                            margin=dict(l=20, r=80, t=40, b=20),
-                            coloraxis_showscale=False,
-                            xaxis=dict(ticksuffix="%", range=[0, 100]),
-                        )
-                        st.plotly_chart(_fig_prods, use_container_width=True)
+                        _fig_sow.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30))
+                        st.plotly_chart(_fig_sow, width='stretch')
 
         elif st.session_state.get("sim_run_triggered") and not _sim_segs_eff:
             st.warning("No segments to analyse — all included segments are also in the exclude list. Remove some exclusions.")
@@ -2527,7 +2803,7 @@ with tab_audit:
         )
         ctrl_cov["Contact %"] = (1 - ctrl_cov["Control %"]).map("{:.1%}".format)
         ctrl_cov["Control %"] = ctrl_cov["Control %"].map("{:.1%}".format)
-        st.dataframe(ctrl_cov, use_container_width=True)
+        st.dataframe(ctrl_cov, width='stretch')
 
         if "tbl" in dir() and not tbl.empty:
             n_cols_tbl = [c for c in tbl.columns if c.endswith("_n")]
@@ -2560,7 +2836,7 @@ with tab_audit:
                     top[n_col] = top[n_col].map("{:,.0f}".format)
                 top[metric_col] = top[metric_col].map("{:.2%}".format)
                 top.columns = ([label, "N", "Confidence"] if len(top.columns) == 3 else [label])
-                st.dataframe(top, use_container_width=True)
+                st.dataframe(top, width='stretch')
 
             _fc = ordered_comms[0]  if ordered_comms else None
             _lc = ordered_comms[-1] if ordered_comms else None
