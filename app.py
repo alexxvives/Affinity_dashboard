@@ -1926,14 +1926,16 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 matplotlib.use('Agg')
                 import matplotlib.pyplot as _plt2
                 from scipy.stats import gaussian_kde as _gkde_sow2
+                from scipy.ndimage import gaussian_filter as _gf2
                 _x2 = _sow_df2["amount_deposit_spot_balance"].values
                 _y2 = _sow_df2["total_deposits_ixi"].values
                 try:
-                    _kde2 = _gkde_sow2(np.vstack([_x2, _y2]))
-                    _xi2 = np.linspace(_x2.min(), _x2.max(), 120)
-                    _yi2 = np.linspace(_y2.min(), _y2.max(), 120)
+                    _kde2 = _gkde_sow2(np.vstack([_x2, _y2]), bw_method=0.3)
+                    _xi2 = np.linspace(_x2.min(), _x2.max(), 200)
+                    _yi2 = np.linspace(_y2.min(), _y2.max(), 200)
                     _XX2, _YY2 = np.meshgrid(_xi2, _yi2)
                     _ZZ2 = _kde2(np.vstack([_XX2.ravel(), _YY2.ravel()])).reshape(_XX2.shape)
+                    _ZZ2 = _gf2(_ZZ2, sigma=3)  # smooth to remove jagged edges
                     _z_pts2 = _kde2(np.vstack([_x2, _y2]))
                     for _plbl2, _clr2 in [
                         (90, "#2166ac"),   # blue  — outermost boundary
@@ -1949,6 +1951,8 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                         _first2 = True
                         for _seg2 in _cs2.get_paths():
                             _verts2 = _seg2.vertices
+                            if len(_verts2) < 5:
+                                continue
                             _fig_sow2.add_trace(go.Scatter(
                                 x=np.append(_verts2[:, 0], _verts2[0, 0]),
                                 y=np.append(_verts2[:, 1], _verts2[0, 1]),
@@ -2803,14 +2807,16 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                             matplotlib.use('Agg')
                             import matplotlib.pyplot as _plts
                             from scipy.stats import gaussian_kde as _gkde_sow
+                            from scipy.ndimage import gaussian_filter as _gfs
                             _xs = _sow_sc_df["amount_deposit_spot_balance"].values
                             _ys = _sow_sc_df["total_deposits_ixi"].values
                             try:
-                                _kdes = _gkde_sow(np.vstack([_xs, _ys]))
-                                _xis = np.linspace(_xs.min(), _xs.max(), 120)
-                                _yis = np.linspace(_ys.min(), _ys.max(), 120)
+                                _kdes = _gkde_sow(np.vstack([_xs, _ys]), bw_method=0.3)
+                                _xis = np.linspace(_xs.min(), _xs.max(), 200)
+                                _yis = np.linspace(_ys.min(), _ys.max(), 200)
                                 _XXs, _YYs = np.meshgrid(_xis, _yis)
                                 _ZZs = _kdes(np.vstack([_XXs.ravel(), _YYs.ravel()])).reshape(_XXs.shape)
+                                _ZZs = _gfs(_ZZs, sigma=3)  # smooth to remove jagged edges
                                 _z_pts_s = _kdes(np.vstack([_xs, _ys]))
                                 for _plbls, _clrs in [
                                     (90, "#2166ac"),   # blue  — outermost boundary
@@ -2826,6 +2832,8 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                                     _firsts = True
                                     for _segs in _css.get_paths():
                                         _vertss = _segs.vertices
+                                        if len(_vertss) < 5:
+                                            continue
                                         _fig_sow.add_trace(go.Scatter(
                                             x=np.append(_vertss[:, 0], _vertss[0, 0]),
                                             y=np.append(_vertss[:, 1], _vertss[0, 1]),
