@@ -1933,9 +1933,9 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                     _ZZ2 = _kde2(np.vstack([_XX2.ravel(), _YY2.ravel()])).reshape(_XX2.shape)
                     _z_pts2 = _kde2(np.vstack([_x2, _y2]))
                     for _plbl2, _clr2 in [
-                        (90, "rgba(255,255,255,0.9)"),
-                        (75, "rgba(255,220,80,0.9)"),
-                        (50, "rgba(255,140,30,0.9)"),
+                        (90, "#0d47a1"),
+                        (75, "#e65100"),
+                        (50, "#1b5e20"),
                     ]:
                         _lvl2 = float(np.percentile(_z_pts2, 100 - _plbl2))
                         if _lvl2 <= 0:
@@ -1944,13 +1944,15 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                             x=_xi2, y=_yi2, z=_ZZ2,
                             autocontour=False,
                             contours=dict(start=_lvl2, end=_lvl2 * 1.5, size=_lvl2, coloring='none'),
-                            line=dict(color=_clr2, width=1.8, dash='dot'),
+                            line=dict(color=_clr2, width=2.5),
                             showscale=False, hoverinfo='skip',
-                            name=f'{_plbl2}% region', showlegend=True,
+                            name=f'{_plbl2}th pct', showlegend=True,
                         ))
                 except Exception:
                     pass
-            _fig_sow2.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30))
+            _fig_sow2.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
+                                    legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)',
+                                                bordercolor='#aaa', borderwidth=1))
             st.plotly_chart(_fig_sow2, width='stretch')
 
 
@@ -2796,9 +2798,9 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                                 _ZZs = _kdes(np.vstack([_XXs.ravel(), _YYs.ravel()])).reshape(_XXs.shape)
                                 _z_pts_s = _kdes(np.vstack([_xs, _ys]))
                                 for _plbls, _clrs in [
-                                    (90, "rgba(255,255,255,0.9)"),
-                                    (75, "rgba(255,220,80,0.9)"),
-                                    (50, "rgba(255,140,30,0.9)"),
+                                    (90, "#0d47a1"),
+                                    (75, "#e65100"),
+                                    (50, "#1b5e20"),
                                 ]:
                                     _lvls = float(np.percentile(_z_pts_s, 100 - _plbls))
                                     if _lvls <= 0:
@@ -2807,13 +2809,15 @@ Same logic: `unique customers × mean incremental accounts change (treated − c
                                         x=_xis, y=_yis, z=_ZZs,
                                         autocontour=False,
                                         contours=dict(start=_lvls, end=_lvls * 1.5, size=_lvls, coloring='none'),
-                                        line=dict(color=_clrs, width=1.8, dash='dot'),
+                                        line=dict(color=_clrs, width=2.5),
                                         showscale=False, hoverinfo='skip',
-                                        name=f'{_plbls}% region', showlegend=True,
+                                        name=f'{_plbls}th pct', showlegend=True,
                                     ))
                             except Exception:
                                 pass
-                        _fig_sow.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30))
+                        _fig_sow.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
+                                               legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)',
+                                                           bordercolor='#aaa', borderwidth=1))
                         st.plotly_chart(_fig_sow, width='stretch')
 
         elif st.session_state.get("sim_run_triggered") and not _sim_segs_eff:
