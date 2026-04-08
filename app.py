@@ -1074,7 +1074,7 @@ st.title("Affinity Explorer")
 st.caption(
     "Analyse how each communication touchpoint affects customer balances and accounts across segments. "
     "Use the **Segment Explorer** to browse segments, **Data** for the full data grid, "
-    "**Audience Simulator** for audience recommendations, **Charts** for visual deep-dives, "
+    "**Audience Simulator** for audience recommendations, "
     "and **Data Quality** for health checks. Adjust filters in the sidebar."
 )
 
@@ -1162,11 +1162,10 @@ if not ordered_comms:
     ordered_comms = _all_present_comms[:]
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_explorer, tab_table, tab_simulator, tab_charts, tab_audit = st.tabs([
+tab_explorer, tab_table, tab_simulator, tab_audit = st.tabs([
     "Segment Explorer",
     "Data",
     "Audience Simulator",
-    "Charts",
     "Data Quality",
 ])
 
@@ -1284,7 +1283,7 @@ Control = customers with `contact_flag=0` for each respective communication.
 This answers: "Is receiving this specific combination of touch-points statistically significant vs receiving none of them?" It reduces journey confounding because you are comparing a tightly defined treatment group against a clean non-contacted baseline.
         """)
     # ── Metric toggle ─────────────────────────────────────────────────────────
-    _metric_opts = ["Balance & Accounts", "Balance only", "Accounts only"]
+    _metric_opts = ["Balance only", "Balance & Accounts", "Accounts only"]
     _show_metric_radio = st.radio(
         "Show columns",
         _metric_opts,
@@ -1822,6 +1821,12 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                                   mode="lines+markers",
                                   line=dict(color="#103060", width=2, shape="spline", smoothing=1.0),
                                   marker=dict(size=6, color="#103060"), showlegend=False, name="")
+            _age_med2 = float(_d["age"].dropna().median())
+            _age_med_bin2 = str(pd.cut([_age_med2], bins=_age_bins2, labels=_age_labels2, right=False)[0])
+            _fig_age2.add_vline(x=_age_med_bin2, line=dict(color="red", width=2, dash="dash"),
+                                annotation_text=f"Median: {_age_med2:.1f}y",
+                                annotation_position="top",
+                                annotation_font=dict(color="red", size=11))
             _fig_age2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
                                     coloraxis_showscale=False, showlegend=False)
             st.plotly_chart(_fig_age2, width='stretch')
@@ -1849,6 +1854,11 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             _k2 = _kde_dt(_d["tenure_years"], 20, "#1a3a6b")
             if _k2:
                 _fig_ten2.add_trace(_k2)
+            _ten_med2 = float(_d["tenure_years"].dropna().median())
+            _fig_ten2.add_vline(x=_ten_med2, line=dict(color="red", width=2, dash="dash"),
+                                annotation_text=f"Median: {_ten_med2:.1f}y",
+                                annotation_position="top right",
+                                annotation_font=dict(color="red", size=11))
             _fig_ten2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
             st.plotly_chart(_fig_ten2, width='stretch')
         with _d4:
@@ -1858,6 +1868,11 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             _k3 = _kde_dt(_d["amount_deposit_spot_balance"], 25, "#7a3100")
             if _k3:
                 _fig_dep2.add_trace(_k3)
+            _dep_med2 = float(_d["amount_deposit_spot_balance"].dropna().median())
+            _fig_dep2.add_vline(x=_dep_med2, line=dict(color="red", width=2, dash="dash"),
+                                annotation_text=f"Median: ${_dep_med2:,.0f}",
+                                annotation_position="top right",
+                                annotation_font=dict(color="red", size=11))
             _fig_dep2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
             st.plotly_chart(_fig_dep2, width='stretch')
         with _d5:
@@ -1897,6 +1912,11 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                                   mode="lines+markers",
                                   line=dict(color="#5a0000", width=2, shape="spline", smoothing=0.8),
                                   marker=dict(size=6, color="#5a0000"), showlegend=False, name="")
+            _nprod_med2 = float(_d["n_products"].dropna().median())
+            _fig_np2.add_vline(x=_nprod_med2, line=dict(color="red", width=2, dash="dash"),
+                               annotation_text=f"Median: {_nprod_med2:.0f}",
+                               annotation_position="top right",
+                               annotation_font=dict(color="red", size=11))
             _fig_np2.update_layout(height=340, margin=dict(l=20, r=20, t=50, b=30),
                                     coloraxis_showscale=False)
             st.plotly_chart(_fig_np2, width='stretch')
@@ -1989,279 +2009,17 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                             )
                 except Exception:
                     pass
+            _mean_sow2 = float(_sow_df2["sow"].mean())
+            _fig_sow2.add_trace(go.Scatter(
+                x=[None], y=[None], mode='lines',
+                line=dict(color='rgba(0,0,0,0)', width=0),
+                name=f'Mean SoW: {_mean_sow2:.1%}',
+                showlegend=True,
+            ))
             _fig_sow2.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
                                     legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)',
                                                 bordercolor='#aaa', borderwidth=1))
             st.plotly_chart(_fig_sow2, width='stretch')
-
-
-# ══════════════════════════════════════════════════════════
-# CHARTS TAB
-# ══════════════════════════════════════════════════════════
-with tab_charts:
-    with st.expander("How to read the charts", expanded=False):
-        st.markdown("""
-**Bar chart** — ranks segments by the selected metric. Taller = stronger average effect. Error bars are 95% confidence intervals (wider = less certain). Use this to decide which segments to prioritise in the next campaign.
-
-**Heatmap** — segment × communication grid. Each cell = mean % change. Dark green = strong positive response. Use this to spot *which communications* work for *which segments*, and identify segments that respond early vs late in the journey.
-
-**Journey timeline** — tracks how selected segments perform at each touchpoint over time. Rising lines = improving engagement. Flat or falling lines = fatigue or declining relevance at that stage.
-
-**Violin chart** — shows the *full distribution* of individual % changes, not just the average. Wide violin = high variability (average driven by a few extreme responders). Narrow = consistent. Use this to spot segments where the mean is misleading.
-
-**KDE density explorer** — smoothed density curve, useful for comparing the *shape* of responses across segments. Separated peaks = meaningfully different groups. Overlapping peaks = similar behaviour.
-
-**Co-occurrence heatmap** — cell [A, B] = fraction of segment A customers who are *also* in segment B. Dark blue = heavy overlap. If two high-performing segments overlap heavily, targeting both wastes budget.
-        """)
-
-    if "tbl" not in dir() or tbl.empty:
-        st.warning("No table data — adjust filters in the Data tab.")
-    else:
-        # ── Heatmap ─────────────────────────────────────────────────────────
-        _hm_metric = st.radio(
-            "Heatmap metric",
-            ["Balance %", "Accounts %"],
-            horizontal=True,
-            key="hm_metric",
-            help="Balance % = average % change in account balance over the 7-day window. "
-                 "Accounts % = average % change in number of open accounts. "
-                 "Green cells = positive response to that communication. Red = negative.",
-        )
-        _hm_suffix = "_bal" if _hm_metric == "Balance %" else "_acct"
-        _hm_label  = "Bal% Δ" if _hm_metric == "Balance %" else "Acct% Δ"
-        st.subheader(f"{_hm_label} — segment × communication")
-        st.caption(
-            "**Heatmap** — each cell is the avg % change for a segment (row) "
-            "at a single communication touchpoint (column). Darker green = stronger positive response. "
-            "Use this to spot which communications resonate with which segments, and identify "
-            "segments that respond early vs late in the journey."
-        )
-        heat_cols = [f"{c}{_hm_suffix}" for c in ordered_comms if f"{c}{_hm_suffix}" in tbl.columns]
-        if heat_cols:
-            hm = tbl[heat_cols].copy()
-            hm.columns = [c.replace(_hm_suffix, "") for c in heat_cols]
-            hm["_mean"] = hm.mean(axis=1)
-            hm = hm.sort_values("_mean", ascending=False).head(50).drop(columns="_mean")
-            hm.index = hm.index.astype(str)
-            fig_hm = px.imshow(
-                hm * 100,
-                labels=dict(x="Communication", y="Segment", color=_hm_label),
-                color_continuous_scale="RdYlGn", aspect="auto",
-                title=f"{_hm_label} — Top 50 segments",
-                text_auto=".1f",
-            )
-            _hm_custom = np.empty(hm.shape, dtype=object)
-            for _ri, _sid in enumerate(hm.index):
-                _lbl  = SEGMENT_LABELS.get(str(_sid), "")
-                _desc = SEGMENT_DESCRIPTIONS.get(str(_sid), "")
-                _row_tip = (f"<b>{_sid}</b>" + (f"<br>{_lbl}" if _lbl else "") + (f"<br><i>{_desc}</i>" if _desc else ""))
-                for _ci in range(len(hm.columns)):
-                    _hm_custom[_ri, _ci] = _row_tip
-            fig_hm.update_traces(
-                customdata=_hm_custom,
-                hovertemplate="%{customdata}<br>Comm: %{x} → %{z:.1f}%<extra></extra>",
-            )
-            fig_hm.update_yaxes(
-                type="category", autorange="reversed",
-                tickvals=list(hm.index),
-                ticktext=[str(s) for s in hm.index],
-            )
-            fig_hm.update_xaxes(type="category")
-            fig_hm.update_layout(height=max(420, len(hm) * 14 + 100))
-            st.plotly_chart(fig_hm, width='stretch')
-
-        st.divider()
-
-        # ── Journey timeline ─────────────────────────────────────────────────
-        st.subheader("Journey Timeline — avg % change at each touchpoint")
-        st.caption(
-            "**Journey timeline** — tracks how selected segments perform at each "
-            "communication touchpoint. Rising lines = improving engagement over the journey. "
-            "Flat or falling lines suggest fatigue or declining relevance at that stage. "
-            "Useful for optimising send timing and dropping ineffective touchpoints."
-        )
-        _jt_metric = st.radio("Journey metric", ["Balance %", "Accounts %"], horizontal=True, key="jt_metric")
-        _jt_col    = "balance_pct_change" if _jt_metric == "Balance %" else "accounts_pct_change"
-        _jt_ylabel = "Avg Balance % Change" if _jt_metric == "Balance %" else "Avg Accounts % Change"
-        _jt_sfx      = "_bal" if _jt_metric == "Balance %" else "_acct"
-        _jt_sort_col = next((f"{c}{_jt_sfx}" for c in ordered_comms if f"{c}{_jt_sfx}" in tbl.columns), None)
-        jt_pool = (tbl.sort_values(_jt_sort_col, ascending=False).head(30).index.astype(str).tolist()
-                   if _jt_sort_col else tbl.index.astype(str).tolist()[:30])
-        jt_segs = st.multiselect(
-            "Segments for timeline (top 30)",
-            options=jt_pool,
-            default=jt_pool[:5],
-            format_func=lambda x: x,
-            key="jt_segs",
-        )
-        if jt_segs:
-            jt_rows = []
-            for comm in ordered_comms:
-                sub = df[(df["contact_flag"] == 1) & (df["communication"] == comm) & (df["nsegment"].isin(jt_segs))]
-                for seg in jt_segs:
-                    grp = sub[sub["nsegment"] == seg]
-                    if not grp.empty:
-                        jt_rows.append({
-                            "Communication": comm,
-                            "Segment": seg,
-                            _jt_ylabel: grp[_jt_col].mean(),
-                            "_rank": _rank(comm),
-                        })
-            if jt_rows:
-                jt_df = pd.DataFrame(jt_rows).sort_values("_rank")
-                jt_df["_seg_tip"] = jt_df["Segment"].map(
-                    lambda s: (SEGMENT_LABELS.get(s, s) + (" \u2014 " + SEGMENT_DESCRIPTIONS.get(s, "") if SEGMENT_DESCRIPTIONS.get(s) else ""))
-                )
-                fig_jt = px.line(
-                    jt_df, x="Communication", y=_jt_ylabel, color="Segment",
-                    markers=True,
-                    custom_data=["Segment", "_seg_tip"],
-                    category_orders={"Communication": ordered_comms},
-                    title=f"{_jt_ylabel} across journey touchpoints",
-                )
-                fig_jt.update_traces(
-                    hovertemplate="<b>%{customdata[0]}</b><br>%{customdata[1]}<br>%{x}: %{y:.1%}<extra></extra>"
-                )
-                fig_jt.update_yaxes(tickformat=".1%")
-                fig_jt.update_layout(height=450)
-                st.plotly_chart(fig_jt, width='stretch')
-            else:
-                st.info("No journey data for selected segments.")
-
-        st.divider()
-
-        # ── Segment co-occurrence heatmap ────────────────────────────────────
-        st.subheader("Segment Co-occurrence — how often segments share the same user")
-        st.caption(
-            "**Co-occurrence heatmap** — cell [A, B] = fraction of segment A customers "
-            "who are also in segment B. Dark blue = heavy overlap. "
-            "If two high-performing segments overlap heavily, targeting both wastes budget — "
-            "pick the one with stronger lift. Also useful for building exclusion lists."
-        )
-        _cooc_sort = next((f"{c}_n" for c in ordered_comms if f"{c}_n" in tbl.columns), None)
-        _cooc_pool_size = 100
-        top_segs_cooc = (tbl.sort_values(_cooc_sort, ascending=False).head(_cooc_pool_size).index.astype(str).tolist()
-                         if _cooc_sort else tbl.index.astype(str).tolist()[:_cooc_pool_size])
-        if len(top_segs_cooc) < 2:
-            st.info("Not enough segments with data to compute co-occurrence. Adjust filters.")
-        else:
-            _cooc_max = len(top_segs_cooc)
-            if _cooc_max <= 2:
-                cooc_n = _cooc_max
-            else:
-                _cooc_def = min(40, _cooc_max)
-                if "cooc_n" in st.session_state:
-                    st.session_state["cooc_n"] = max(2, min(int(st.session_state["cooc_n"]), _cooc_max))
-                cooc_n = st.slider("Top N segments to include", 2, _cooc_max, _cooc_def, key="cooc_n")
-            cooc_segs = top_segs_cooc[:cooc_n]
-
-            user_seg_df = (
-                df[df["nsegment"].isin(cooc_segs)]
-                .groupby("alpha_key")["nsegment"]
-                .apply(set)
-                .reset_index()
-            )
-            n_users_total = user_seg_df["alpha_key"].nunique()
-            # Vectorised co-occurrence via indicator matrix multiplication
-            _indicator = (
-                df[df["nsegment"].isin(cooc_segs)]
-                .drop_duplicates(subset=["alpha_key", "nsegment"])
-                .assign(_v=1)
-                .pivot_table(index="alpha_key", columns="nsegment", values="_v", fill_value=0)
-            )
-            _indicator = _indicator.reindex(columns=cooc_segs, fill_value=0)
-            _vals = _indicator.values  # shape (n_users, n_segs)
-            cooc_matrix = pd.DataFrame(
-                _vals.T @ _vals,  # (n_segs, n_segs) — counts of users sharing both segments
-                index=cooc_segs, columns=cooc_segs, dtype=float,
-            )
-            # Normalize by diagonal (self-count = total users in segment)
-            with np.errstate(divide="ignore", invalid="ignore"):
-                diag = np.diag(cooc_matrix.values).copy()
-                diag[diag == 0] = 1
-                cooc_norm = cooc_matrix.values / diag[:, None]
-            cooc_norm_df = pd.DataFrame(cooc_norm, index=cooc_segs, columns=cooc_segs)
-            cooc_norm_df.index   = [str(s) for s in cooc_segs]
-            cooc_norm_df.columns = [str(s) for s in cooc_segs]
-            # Sort rows by max off-diagonal co-occurrence (highest overlap at top)
-            _off_diag = cooc_norm_df.copy()
-            _off_diag_arr = _off_diag.to_numpy().copy()
-            np.fill_diagonal(_off_diag_arr, 0)
-            _row_order = pd.Series(_off_diag_arr.max(axis=1), index=_off_diag.index).sort_values(ascending=False).index.tolist()
-            cooc_norm_df = cooc_norm_df.loc[_row_order, _row_order]
-            fig_cooc = px.imshow(
-                cooc_norm_df,
-                color_continuous_scale="Blues",
-                zmin=0, zmax=1,
-                labels=dict(color="Overlap %"),
-                title="Segment co-occurrence (row = % of segment A customers who also belong to segment B)",
-                aspect="auto",
-            )
-            fig_cooc.update_xaxes(type="category")
-            fig_cooc.update_yaxes(type="category", autorange="reversed")
-            fig_cooc.update_layout(height=600)
-            st.plotly_chart(fig_cooc, width='stretch')
-            st.caption(
-                "**How to read**: cell [A, B] = fraction of segment A users who are also in segment B. "
-                "High values (dark blue) mean heavy overlap — avoid targeting both segments simultaneously."
-            )
-
-        st.divider()
-
-        # ── Distribution explorer ────────────────────────────────────────────
-        st.subheader("Distribution explorer — KDE density")
-        st.caption(
-            "**Distribution explorer** — smoothed KDE density curve for any "
-            "combination of segments and communication. Use this to compare the shape of responses "
-            "side by side: overlapping peaks = similar behaviour; separated peaks = meaningfully "
-            "different customer groups. Segmentation is only useful if groups behave differently."
-        )
-        dc1, dc2, dc3 = st.columns([3, 1, 1])
-        all_segs = sorted(df["nsegment"].unique().tolist())
-        with dc1:
-            dist_segs = st.multiselect("Select segments", options=all_segs, default=all_segs[:5],
-                                       format_func=lambda x: x, key="dist_segs")
-        with dc2:
-            dist_comm = st.selectbox("Communication", options=["All selected"] + ordered_comms, key="dist_comm")
-        with dc3:
-            dist_metric = st.radio("Metric", ["Balance %", "Accounts %"], horizontal=True, key="dist_metric")
-
-        if dist_segs:
-            dm = df[(df["contact_flag"] == 1) & (df["nsegment"].isin(dist_segs))]
-            if dist_comm != "All selected":
-                dm = dm[dm["communication"] == dist_comm]
-            else:
-                dm = dm[dm["communication"].isin(ordered_comms)]
-            metric_col = "balance_pct_change" if dist_metric == "Balance %" else "accounts_pct_change"
-            dm = dm.dropna(subset=[metric_col]).copy()
-            if not dm.empty:
-                drawn = False
-                try:
-                    import plotly.figure_factory as ff
-                    groups  = [dm[dm["nsegment"] == s][metric_col].values.tolist() for s in dist_segs]
-                    labels_ = [f"{s} — {SEGMENT_LABELS.get(s, '')}" for s in dist_segs]
-                    valid   = [(g, l) for g, l in zip(groups, labels_) if len(g) >= 2]
-                    if valid:
-                        gv, lv = zip(*valid)
-                        _colors = list(px.colors.qualitative.Bold[:len(gv)])
-                        fig_dist = ff.create_distplot(list(gv), list(lv), show_hist=False, show_rug=False, colors=_colors)
-                        fig_dist.update_xaxes(tickformat=".0%" if metric_col == "balance_pct_change" else ".2f", title=dist_metric)
-                        fig_dist.update_layout(height=480, title=f"{dist_metric} — KDE density by segment")
-                        st.plotly_chart(fig_dist, width='stretch')
-                        drawn = True
-                except Exception:
-                    pass
-                if not drawn:
-                    dm["_label"] = dm["nsegment"].map(lambda x: f"{x} — {SEGMENT_LABELS.get(x, '')}")
-                    fig_dist = px.histogram(dm, x=metric_col, color="_label", barmode="overlay", opacity=0.65,
-                                            histnorm="probability density",
-                                            color_discrete_sequence=px.colors.qualitative.Bold,
-                                            labels={metric_col: dist_metric, "_label": "Segment"},
-                                            title=f"{dist_metric} — KDE density by segment")
-                    if metric_col == "balance_pct_change":
-                        fig_dist.update_xaxes(tickformat=".0%")
-                    fig_dist.update_layout(height=480)
-                    st.plotly_chart(fig_dist, width='stretch')
 
 
 # ══════════════════════════════════════════════════════════
