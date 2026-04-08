@@ -1939,10 +1939,11 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                 (_sow_df2["amount_deposit_spot_balance"] <= 200_000) &
                 (_sow_df2["total_deposits_ixi"] <= 1_500_000)
             ]
+            _sow_overall_mean2 = float(_sow_df2["sow"].mean())
             _fig_sow2 = px.scatter(
                 _sow_df2, x="amount_deposit_spot_balance", y="total_deposits_ixi",
                 color="sow", color_continuous_scale="RdYlGn", range_color=[0, 1],
-                title="Deposits VS IXI",
+                title=f"Deposits VS IXI (SoW {_sow_overall_mean2:.1%})",
                 labels={"amount_deposit_spot_balance": "Deposit ($)",
                         "total_deposits_ixi": "IXI ($)", "sow": "SoW"},
                 opacity=0.5)
