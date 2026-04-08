@@ -1823,10 +1823,16 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                                   marker=dict(size=6, color="#103060"), showlegend=False, name="")
             _age_med2 = float(_d["age"].dropna().median())
             _age_med_bin2 = str(pd.cut([_age_med2], bins=_age_bins2, labels=_age_labels2, right=False)[0])
-            _fig_age2.add_vline(x=_age_med_bin2, line=dict(color="red", width=2, dash="dash"),
-                                annotation_text=f"Median: {_age_med2:.1f}y",
-                                annotation_position="top",
-                                annotation_font=dict(color="red", size=11))
+            _fig_age2.add_shape(
+                type="line", xref="x", yref="paper",
+                x0=_age_med_bin2, x1=_age_med_bin2, y0=0, y1=1,
+                line=dict(color="red", width=2, dash="dash"),
+            )
+            _fig_age2.add_annotation(
+                x=_age_med_bin2, yref="paper", y=1.05,
+                text=f"Median: {_age_med2:.1f}y", showarrow=False,
+                xanchor="left", font=dict(color="red", size=11),
+            )
             _fig_age2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
                                     coloraxis_showscale=False, showlegend=False)
             st.plotly_chart(_fig_age2, width='stretch')
