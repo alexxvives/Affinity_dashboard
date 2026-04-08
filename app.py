@@ -1821,16 +1821,16 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                                   mode="lines+markers",
                                   line=dict(color="#103060", width=2, shape="spline", smoothing=1.0),
                                   marker=dict(size=6, color="#103060"), showlegend=False, name="")
-            _age_med2 = float(_d["age"].dropna().median())
-            _age_med_bin2 = str(pd.cut([_age_med2], bins=_age_bins2, labels=_age_labels2, right=False)[0])
+            _age_mean2 = float(_d["age"].dropna().mean())
+            _age_mean_bin2 = str(pd.cut([_age_mean2], bins=_age_bins2, labels=_age_labels2, right=False)[0])
             _fig_age2.add_shape(
                 type="line", xref="x", yref="paper",
-                x0=_age_med_bin2, x1=_age_med_bin2, y0=0, y1=1,
+                x0=_age_mean_bin2, x1=_age_mean_bin2, y0=0, y1=1,
                 line=dict(color="red", width=2, dash="dash"),
             )
             _fig_age2.add_annotation(
-                x=_age_med_bin2, yref="paper", y=1.05,
-                text=f"Median: {_age_med2:.1f}y", showarrow=False,
+                x=_age_mean_bin2, yref="paper", y=1.05,
+                text=f"Mean: {_age_mean2:.1f}y", showarrow=False,
                 xanchor="left", font=dict(color="red", size=11),
             )
             _fig_age2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
@@ -1921,9 +1921,9 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                                   mode="lines+markers",
                                   line=dict(color="#5a0000", width=2, shape="spline", smoothing=0.8),
                                   marker=dict(size=6, color="#5a0000"), showlegend=False, name="")
-            _nprod_med2 = float(_d["n_products"].dropna().median())
-            _fig_np2.add_vline(x=_nprod_med2, line=dict(color="red", width=2, dash="dash"),
-                               annotation_text=f"Median: {_nprod_med2:.0f}",
+            _nprod_mean2 = float(_d["n_products"].dropna().mean())
+            _fig_np2.add_vline(x=_nprod_mean2, line=dict(color="red", width=2, dash="dash"),
+                               annotation_text=f"Mean: {_nprod_mean2:.1f}",
                                annotation_position="top right",
                                annotation_font=dict(color="red", size=11))
             _fig_np2.update_layout(height=340, margin=dict(l=20, r=20, t=50, b=30),
