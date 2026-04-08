@@ -1868,7 +1868,9 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
             _fig_ten2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
             st.plotly_chart(_fig_ten2, width='stretch')
         with _d4:
-            _fig_dep2 = px.histogram(_d, x="amount_deposit_spot_balance", nbins=25, title="Deposit Balance",
+            _dep_p99 = float(_d["amount_deposit_spot_balance"].dropna().quantile(0.99))
+            _fig_dep2 = px.histogram(_d[_d["amount_deposit_spot_balance"] <= _dep_p99],
+                                     x="amount_deposit_spot_balance", nbins=25, title="Deposit Balance",
                                      labels={"amount_deposit_spot_balance": "Balance ($)"},
                                      color_discrete_sequence=["#F4A261"])
             _k3 = _kde_dt(_d["amount_deposit_spot_balance"], 25, "#7a3100")
@@ -1879,6 +1881,7 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                                 annotation_text=f"Median: ${_dep_med2:,.0f}",
                                 annotation_position="top right",
                                 annotation_font=dict(color="red", size=11))
+            _fig_dep2.update_xaxes(range=[0, _dep_p99])
             _fig_dep2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
             st.plotly_chart(_fig_dep2, width='stretch')
         with _d5:
@@ -1963,6 +1966,7 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                     _ZZ2 = _kde2(np.vstack([_XX2.ravel(), _YY2.ravel()])).reshape(_XX2.shape)
                     _ZZ2 = _gf2(_ZZ2, sigma=3)
                     _z_pts2 = _kde2(np.vstack([_x2, _y2]))
+                    _sow_vals2 = _sow_df2["sow"].values
                     for _plbl2, _clr2 in [
                         (90, "#2166ac"),   # blue  — outermost (90% of pts inside)
                         (50, "#1a9850"),   # green — 50% inside
@@ -1972,11 +1976,14 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                         _lvl2 = float(np.percentile(_z_pts2, 100 - _plbl2))
                         if _lvl2 <= 0:
                             continue
+                        _mask2 = _z_pts2 >= _lvl2
+                        _sow_grp2 = float(np.mean(_sow_vals2[_mask2])) if _mask2.any() else float('nan')
+                        _sow_lbl2 = f" (SoW {_sow_grp2:.1%})" if not np.isnan(_sow_grp2) else ""
                         # Dummy trace for legend entry only (shapes don't appear in legend)
                         _fig_sow2.add_trace(go.Scatter(
                             x=[None], y=[None], mode='lines',
                             line=dict(color=_clr2, width=2.5),
-                            name=f'{_plbl2}th pct',
+                            name=f'{_plbl2}th pct{_sow_lbl2}',
                             legendgroup=f'pct{_plbl2}_2', showlegend=True,
                         ))
                         _mfig2, _max2 = _plt2.subplots()
@@ -2015,13 +2022,6 @@ The displayed lift is computed directly on the **final recommended cohort**: eac
                             )
                 except Exception:
                     pass
-            _mean_sow2 = float(_sow_df2["sow"].mean())
-            _fig_sow2.add_trace(go.Scatter(
-                x=[None], y=[None], mode='lines',
-                line=dict(color='rgba(0,0,0,0)', width=0),
-                name=f'Mean SoW: {_mean_sow2:.1%}',
-                showlegend=True,
-            ))
             _fig_sow2.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
                                     legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)',
                                                 bordercolor='#aaa', borderwidth=1))
