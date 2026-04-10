@@ -786,7 +786,7 @@ def _styled_html_table(
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
                     color: #ccc !important; font-weight: normal; cursor: help;
-                    padding: 4px 24px 4px 12px; min-width: 110px; }}
+                    padding: 4px 24px 4px 12px; min-width: 90px; }}
   th.blank {{ background: #262730 !important; }}
 </style></head><body>
 <div style="overflow:auto; max-height:{height - 20}px;">{html}</div>
@@ -1513,12 +1513,13 @@ if active_campaign == "SELECTCHK":
             components.html(html_tbl, height=_tbl_h, scrolling=True)
 
             # ── Downloads ────────────────────────────────────────────────────
-            st.download_button(
-                label="↓ Download Excel",
+            _, _sdl_col, _ = st.columns([2, 3, 2])
+            _sdl_col.download_button(
+                label="⬇ Download Excel",
                 data=build_excel(tbl, ordered_comms),
                 file_name="selectchk_segment_lift.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=False,
+                use_container_width=True,
                 key="selectchk_dl_xlsx",
             )
 
@@ -2938,7 +2939,8 @@ elif active_campaign == "CC_BT":
         "Analyse which customer segments show the highest lift in Balance Transfer conversion rate — "
         "the share of contacted customers who transferred debt to our credit card — and in average BT amount. "
         "Use the sidebar to adjust the minimum-N threshold. "
-        "The **Data** tab shows per-segment lift; **Demographics** shows the audience profile."
+        "Use the **Segment Explorer** to browse segments, **Data** for the lift table, "
+        "**Audience Simulator** for audience recommendations, and **Data Quality** for health checks."
     )
 
     # ── Load raw CSV ──────────────────────────────────────────────────────────
@@ -2971,7 +2973,79 @@ elif active_campaign == "CC_BT":
     _bt_tbl = agg_cc_bt(_bt_df, min_n=bt_min_n)
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
-    _bt_tab_data, _bt_tab_demo = st.tabs(["Data", "Demographics"])
+    _bt_tab_explorer, _bt_tab_data, _bt_tab_sim, _bt_tab_dq = st.tabs([
+        "Segment Explorer",
+        "Data",
+        "Audience Simulator",
+        "Data Quality",
+    ])
+
+    # ════ SEGMENT EXPLORER TAB ════════════════════════════════════════════════
+    with _bt_tab_explorer:
+        st.subheader("Segment catalogue")
+        st.caption("Browse all segments by BT conversion performance. Unique Customers = treated customers in this campaign.")
+        if not SEGMENT_LABELS:
+            st.info("No segment descriptions found. Ensure segment_descriptions.csv is present.")
+        else:
+            _bt_exp_base = pd.DataFrame({
+                "Segment ID": list(SEGMENT_LABELS.keys()),
+                "Group":      list(SEGMENT_LABELS.values()),
+                "Description": [SEGMENT_DESCRIPTIONS.get(k, "") for k in SEGMENT_LABELS],
+            })
+            _bt_user_counts = (
+                _bt_df[_bt_df["control_flag"] == 0]
+                .groupby("nsegment")["alpha_key"]
+                .nunique()
+                .rename("Unique Customers")
+                .reset_index()
+                .rename(columns={"nsegment": "Segment ID"})
+            )
+            _bt_exp_base = _bt_exp_base.merge(_bt_user_counts, on="Segment ID", how="left")
+            _bt_exp_base["Unique Customers"] = _bt_exp_base["Unique Customers"].fillna(0).astype(int)
+            _bt_exp_base = _bt_exp_base.sort_values("Segment ID").reset_index(drop=True)
+            _bt_exp_styler = (
+                _bt_exp_base.set_index("Segment ID").rename_axis(None)
+                .style
+                .apply(lambda s: s.map(_n_color), subset=["Unique Customers"], axis=0)
+                .format(na_rep="")
+            )
+            _bt_exp_h = max(300, min(700, 60 + len(_bt_exp_base) * 26))
+            components.html(
+                _styled_html_table(_bt_exp_styler, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_bt_exp_h),
+                height=_bt_exp_h, scrolling=True,
+            )
+            st.divider()
+            _grp_sz_bt = (
+                _bt_exp_base.groupby("Group")
+                .agg(Segments=("Segment ID", "count"), Customers=("Unique Customers", "sum"))
+                .reset_index()
+                .sort_values("Customers", ascending=False)
+            )
+            _fig_gsz_bt = px.bar(
+                _grp_sz_bt, x="Group", y="Segments",
+                color="Segments", color_continuous_scale="Blues",
+                text="Segments", title="Segments per group",
+            )
+            _fig_gsz_bt.update_xaxes(tickangle=-30)
+            _fig_gsz_bt.update_traces(textposition="outside")
+            _fig_gsz_bt.update_layout(
+                coloraxis_showscale=False, height=360,
+                yaxis_range=[0, int(_grp_sz_bt["Segments"].max()) * 1.20],
+            )
+            st.plotly_chart(_fig_gsz_bt, width='stretch')
+            _fig_gus_bt = px.bar(
+                _grp_sz_bt, x="Group", y="Customers",
+                color="Customers", color_continuous_scale="Teal",
+                text=_grp_sz_bt["Customers"].map(lambda v: f"{v:,}"),
+                title="Unique treated customers per group",
+            )
+            _fig_gus_bt.update_xaxes(tickangle=-30)
+            _fig_gus_bt.update_traces(textposition="outside")
+            _fig_gus_bt.update_layout(
+                coloraxis_showscale=False, height=360,
+                yaxis_range=[0, int(_grp_sz_bt["Customers"].max()) * 1.20],
+            )
+            st.plotly_chart(_fig_gus_bt, width='stretch')
 
     # ════ DATA TAB ════════════════════════════════════════════════════════════
     with _bt_tab_data:
@@ -3062,12 +3136,13 @@ elif active_campaign == "CC_BT":
 
             # ── Downloads (right below table, before chart) ───────────────────
             _bt_metric_key = "conv" if _bt_metric == "BT Conversion Lift" else "amt"
-            st.download_button(
-                label="↓ Download Excel",
+            _, _bt_btn_col, _ = st.columns([2, 3, 2])
+            _bt_btn_col.download_button(
+                label="⬇ Download Excel",
                 data=build_cc_bt_excel(_bt_tbl, _bt_metric_key),
                 file_name="cc_bt_segment_lift.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=False,
+                use_container_width=True,
                 key="bt_dl_xlsx",
             )
 
@@ -3108,141 +3183,165 @@ elif active_campaign == "CC_BT":
                 _fig_bt.update_xaxes(tickprefix="$", tickformat=",.0f")
             st.plotly_chart(_fig_bt, use_container_width=True)
 
-    # ════ DEMOGRAPHICS TAB ════════════════════════════════════════════════════
-    with _bt_tab_demo:
-        if _aud_df is None:
-            st.info("No audience_profile.csv found — demographics unavailable.")
+    # ════ AUDIENCE SIMULATOR TAB ══════════════════════════════════════════════
+    with _bt_tab_sim:
+        st.subheader("Audience Performance Simulator")
+        st.caption(
+            "Select any set of segments and we'll estimate the **expected BT conversion rate "
+            "and incremental revenue** if you targeted only those customers. "
+            "Each customer is counted once — the lift shown is what you'd actually observe on that cohort."
+        )
+        if _bt_tbl.empty:
+            st.warning("No table data — adjust the minimum-N filter in the sidebar first.")
         else:
-            st.subheader("Audience demographics — CC Balance Transfer campaign")
-            st.caption(
-                "Demographics of the **treated** population (customers who received the BT offer). "
-                "Merge is on alpha_key — only users present in both files are shown."
+            _sim_opts = sorted(_bt_tbl.index.astype(str).tolist())
+            _bt_sim_segs = st.multiselect(
+                "Select segments to include in audience",
+                options=_sim_opts,
+                default=[],
+                key="bt_sim_segs",
+                format_func=lambda x: (
+                    f"{x}  —  {SEGMENT_LABELS.get(str(x), '')}"
+                    if SEGMENT_LABELS.get(str(x)) else str(x)
+                ),
             )
-
-            _bt_treated_keys = set(
-                _bt_df[_bt_df["control_flag"] == 0]["alpha_key"].unique()
-            )
-            _dem = _aud_df[_aud_df["alpha_key"].isin(_bt_treated_keys)].copy()
-
-            # Merge BT outcome back so we can colour by converter
-            _bt_outcome = (
-                _bt_df[_bt_df["control_flag"] == 0][["alpha_key", "bt_flag"]]
-                .drop_duplicates("alpha_key")
-            )
-            _dem = _dem.merge(_bt_outcome, on="alpha_key", how="left")
-
-            if _dem.empty:
-                st.warning("No demographic data found for treated users (check alpha_key alignment).")
+            if not _bt_sim_segs:
+                st.info("Select one or more segments above to run the simulation.")
             else:
-                _d1, _d2 = st.columns(2)
+                _sim_df = _bt_df[_bt_df["nsegment"].astype(str).isin(_bt_sim_segs)]
+                _sim_treated = _sim_df[_sim_df["control_flag"] == 0].drop_duplicates("alpha_key")
+                _sim_control = _sim_df[_sim_df["control_flag"] == 1].drop_duplicates("alpha_key")
+                _sim_n = len(_sim_treated)
+                _sim_conv_t = _sim_treated["bt_flag"].mean() if _sim_n > 0 else 0.0
+                _sim_conv_c = _sim_control["bt_flag"].mean() if len(_sim_control) > 0 else 0.0
+                _sim_lift = _sim_conv_t - _sim_conv_c
+                _sim_converters = _sim_treated[_sim_treated["bt_flag"] == 1]
+                _sim_avg_amt = _sim_converters["bt_amount"].mean() if not _sim_converters.empty else 0.0
+                _sim_incr_conv = int(_sim_n * max(0.0, _sim_lift))
 
-                with _d1:
-                    if "age" in _dem.columns:
-                        _fig_age = px.histogram(
-                            _dem, x="age", nbins=25,
-                            color="bt_flag" if "bt_flag" in _dem.columns else None,
-                            barmode="overlay",
-                            title="Age distribution (treated)",
-                            labels={"age": "Age", "bt_flag": "Converted"},
-                            color_discrete_map={0: "#636EFA", 1: "#63BE7B"},
-                            opacity=0.75,
-                        )
-                        _fig_age.update_layout(height=300, bargap=0.05)
-                        st.plotly_chart(_fig_age, use_container_width=True)
+                _s1, _s2, _s3, _s4 = st.columns(4)
+                _s1.metric("Audience size", f"{_sim_n:,}")
+                _s2.metric("Expected BT rate", f"{_sim_conv_t:.1%}",
+                           delta=f"{_sim_lift:+.1%} vs control")
+                _s3.metric("Avg BT amount (converters)", f"${_sim_avg_amt:,.0f}")
+                _s4.metric("Projected incremental converters", f"{_sim_incr_conv:,}")
 
-                with _d2:
-                    if "gender" in _dem.columns:
-                        _gcounts = _dem["gender"].value_counts(dropna=False).reset_index()
-                        _gcounts.columns = ["Gender", "Count"]
-                        _fig_g = px.pie(
-                            _gcounts, names="Gender", values="Count",
-                            title="Gender split (treated)",
-                            color_discrete_sequence=px.colors.qualitative.Pastel,
-                        )
-                        _fig_g.update_layout(height=300)
-                        st.plotly_chart(_fig_g, use_container_width=True)
-
-                _d3, _d4 = st.columns(2)
-
-                with _d3:
-                    if "tenure_years" in _dem.columns:
-                        _fig_ten = px.histogram(
-                            _dem, x="tenure_years", nbins=20,
-                            title="Tenure (years) — treated",
-                            color_discrete_sequence=["#EF553B"],
-                        )
-                        _fig_ten.update_layout(height=300, bargap=0.05)
-                        st.plotly_chart(_fig_ten, use_container_width=True)
-
-                with _d4:
-                    if "amount_deposit_spot_balance" in _dem.columns and "total_deposits_ixi" in _dem.columns:
-                        _samp = _dem.sample(min(500, len(_dem)), random_state=42)
-                        _fig_sc = px.scatter(
-                            _samp,
-                            x="amount_deposit_spot_balance",
-                            y="total_deposits_ixi",
-                            color="bt_flag" if "bt_flag" in _samp.columns else None,
-                            title="Deposit balance vs IXI (treated sample)",
-                            labels={
-                                "amount_deposit_spot_balance": "Deposit Balance ($)",
-                                "total_deposits_ixi": "IXI Net Worth ($)",
-                                "bt_flag": "Converted",
-                            },
-                            color_discrete_map={0: "#636EFA", 1: "#63BE7B"},
-                            opacity=0.5,
-                            log_x=True, log_y=True,
-                        )
-                        _fig_sc.update_layout(height=300)
-                        st.plotly_chart(_fig_sc, use_container_width=True)
-
-                # BT conversion rate by age band
-                if "bt_flag" in _dem.columns and "age" in _dem.columns:
-                    st.divider()
-                    _age_bins = list(range(20, 80, 5))
-                    _bt_age = (
-                        _dem.groupby(pd.cut(_dem["age"], bins=_age_bins))["bt_flag"]
-                        .agg(["mean", "count"])
-                        .reset_index()
-                    )
-                    _bt_age.columns = ["Age band", "BT rate", "N"]
-                    _bt_age["Age band"] = _bt_age["Age band"].astype(str)
-                    _bt_age["label"] = _bt_age["N"].map(lambda n: f"n={n:,}")
-                    _fig_btage = px.bar(
-                        _bt_age, x="Age band", y="BT rate",
-                        title="BT conversion rate by age band (treated)",
-                        text="label",
-                        color="BT rate",
-                        color_continuous_scale="Teal",
-                    )
-                    _fig_btage.update_yaxes(tickformat=".1%")
-                    _fig_btage.update_traces(textposition="outside")
-                    _fig_btage.update_layout(height=360, coloraxis_showscale=False)
-                    st.plotly_chart(_fig_btage, use_container_width=True)
-
-                # Product adoption breakdown
-                _prod_cols_present = [
-                    c for c in [
-                        "Checking", "Savings", "Credit Card", "Mortgage",
-                        "Investments", "Loan", "Loan - Personal",
-                    ]
-                    if c in _dem.columns
+                st.divider()
+                st.markdown("**Per-segment breakdown**")
+                _sim_bd_cols = [c for c in [
+                    "conv_treated", "conv_control", "conv_lift", "conv_lift_ci",
+                    "n_treated", "n_control",
+                ] if c in _bt_tbl.columns]
+                _sim_breakdown = _bt_tbl.loc[
+                    _bt_tbl.index.astype(str).isin(_bt_sim_segs), _sim_bd_cols
+                ].copy()
+                _sim_breakdown.index = [
+                    f"{x}  —  {SEGMENT_LABELS.get(str(x), '')}"
+                    if SEGMENT_LABELS.get(str(x)) else str(x)
+                    for x in _sim_breakdown.index
                 ]
-                if _prod_cols_present:
-                    st.divider()
-                    _prod_rates = _dem[_prod_cols_present].mean().sort_values(ascending=False)
-                    _fig_prod = px.bar(
-                        x=_prod_rates.index,
-                        y=_prod_rates.values,
-                        title="Product adoption rate — treated audience",
-                        labels={"x": "Product", "y": "Adoption rate"},
-                        color=_prod_rates.values,
-                        color_continuous_scale="Teal",
-                        text=[f"{v:.0%}" for v in _prod_rates.values],
-                    )
-                    _fig_prod.update_traces(textposition="outside")
-                    _fig_prod.update_layout(
-                        height=360,
-                        coloraxis_showscale=False,
-                        yaxis={"tickformat": ".0%"},
-                    )
-                    st.plotly_chart(_fig_prod, use_container_width=True)
+                _sim_bd_rename = {
+                    "conv_treated": "Conv % (treated)", "conv_control": "Conv % (control)",
+                    "conv_lift": "Conv Lift", "conv_lift_ci": "±CI",
+                    "n_treated": "N (treated)", "n_control": "N (control)",
+                }
+                _sim_breakdown = _sim_breakdown.rename(columns=_sim_bd_rename)
+                _pct_fmt_sim = lambda v: f"{v:.2%}" if pd.notna(v) else ""
+                _sim_style = _sim_breakdown.style.format(
+                    {c: _pct_fmt_sim for c in [
+                        "Conv % (treated)", "Conv % (control)", "Conv Lift", "±CI"
+                    ] if c in _sim_breakdown.columns},
+                    na_rep="",
+                )
+                _sim_h = max(200, min(600, 60 + len(_sim_breakdown) * 26))
+                components.html(
+                    _styled_html_table(_sim_style, height=_sim_h),
+                    height=_sim_h, scrolling=True,
+                )
+
+    # ════ DATA QUALITY TAB ════════════════════════════════════════════════════
+    with _bt_tab_dq:
+        st.subheader("Data Quality & Recommendations")
+        st.caption("Live health check of the CC Balance Transfer dataset and current filter settings.")
+
+        _dq1, _dq2, _dq3, _dq4 = st.columns(4)
+        _dq1.metric("Total records",    f"{len(_bt_raw):,}")
+        _dq2.metric("Unique customers", f"{_bt_raw['alpha_key'].nunique():,}")
+        _dq3.metric("Unique segments",  f"{_bt_df['nsegment'].nunique():,}")
+        _dq4.metric("Treated %",        f"{(_bt_raw['control_flag'] == 0).mean():.1%}")
+
+        st.divider()
+
+        with st.expander("Data Quality", expanded=True):
+            _nan_bt  = _bt_raw["bt_flag"].isna().mean()
+            _nan_amt = _bt_raw["bt_amount"].isna().mean()
+            _dup_bt  = _bt_raw.duplicated(subset=["alpha_key"]).mean()
+            _bt_conv = (_bt_raw["bt_flag"] == 1).mean()
+            _ddq1, _ddq2, _ddq3, _ddq4 = st.columns(4)
+            _ddq1.metric("BT flag missing",     f"{_nan_bt:.1%}")
+            _ddq2.metric("BT amount missing",   f"{_nan_amt:.1%}")
+            _ddq3.metric("BT conversion rate",  f"{_bt_conv:.1%}")
+            _ddq4.metric("Duplicate customers", f"{_dup_bt:.1%}")
+
+        with st.expander("Methodology Notes", expanded=True):
+            _ctrl_split_bt  = (_bt_raw["control_flag"] == 1).mean()
+            _treat_split_bt = (_bt_raw["control_flag"] == 0).mean()
+            st.markdown(
+                f"**Treated / Control split:** {_treat_split_bt:.1%} treated — {_ctrl_split_bt:.1%} control"
+            )
+            _bt_overlap = (_bt_df.groupby("alpha_key")["nsegment"].nunique() > 1).mean()
+            _bt_avg_segs = _bt_df.groupby("alpha_key")["nsegment"].nunique().mean()
+            st.info(
+                f"**Segment overlap:** {_bt_overlap:.1%} of customers in >1 segment "
+                f"(avg {_bt_avg_segs:.1f}/customer)."
+            )
+            _bt_seg_dist = _bt_df.groupby("nsegment")["alpha_key"].nunique().describe()
+            st.caption(
+                f"Customers per segment — min: **{int(_bt_seg_dist['min']):,}** | "
+                f"median: **{int(_bt_seg_dist['50%']):,}** | "
+                f"max: **{int(_bt_seg_dist['max']):,}**"
+            )
+
+        with st.expander("Top Segment Recommendations", expanded=True):
+            if _bt_tbl.empty:
+                st.warning("No table data — adjust filters first.")
+            else:
+                _top_conv_bt = (
+                    _bt_tbl[["conv_lift", "n_treated"]].dropna(subset=["conv_lift"])
+                    .sort_values("conv_lift", ascending=False)
+                    .head(10)
+                    .copy()
+                )
+                _top_conv_bt["Confidence"] = _top_conv_bt["n_treated"].map(
+                    lambda n: "🟢 High" if n >= 100 else ("🟡 Medium" if n >= 30 else "🔴 Low")
+                )
+                _top_conv_bt.index = [
+                    f"{x}  —  {SEGMENT_LABELS.get(str(x), '')}" for x in _top_conv_bt.index
+                ]
+                _top_conv_bt = _top_conv_bt.rename(
+                    columns={"conv_lift": "Conv Lift", "n_treated": "N (treated)"}
+                )
+                _top_conv_bt["Conv Lift"] = _top_conv_bt["Conv Lift"].map("{:.2%}".format)
+                _top_conv_bt["N (treated)"] = _top_conv_bt["N (treated)"].map("{:,.0f}".format)
+                _rc1_bt, _rc2_bt = st.columns(2)
+                with _rc1_bt:
+                    st.markdown("**Top 10 segments — BT Conversion Lift**")
+                    st.dataframe(_top_conv_bt, width='stretch')
+                with _rc2_bt:
+                    if "amt_lift" in _bt_tbl.columns:
+                        _top_amt_bt = (
+                            _bt_tbl[["amt_lift", "n_treated"]].dropna(subset=["amt_lift"])
+                            .sort_values("amt_lift", ascending=False)
+                            .head(10)
+                            .copy()
+                        )
+                        _top_amt_bt.index = [
+                            f"{x}  —  {SEGMENT_LABELS.get(str(x), '')}" for x in _top_amt_bt.index
+                        ]
+                        _top_amt_bt = _top_amt_bt.rename(
+                            columns={"amt_lift": "Amt Lift ($)", "n_treated": "N (treated)"}
+                        )
+                        _top_amt_bt["Amt Lift ($)"] = _top_amt_bt["Amt Lift ($)"].map("${:,.0f}".format)
+                        _top_amt_bt["N (treated)"] = _top_amt_bt["N (treated)"].map("{:,.0f}".format)
+                        st.markdown("**Top 10 segments — BT Amount Lift**")
+                        st.dataframe(_top_amt_bt, width='stretch')
