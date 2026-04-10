@@ -1402,12 +1402,6 @@ def _two_tables_html(items: list, height: int) -> str:
 # SELECTCHK CAMPAIGN
 # ══════════════════════════════════════════════════════════
 if active_campaign == "SELECTCHK":
-    st.caption(
-        "Analyse how each communication touchpoint affects customer balances and accounts across segments. "
-        "Use the **Segment Explorer** to browse segments, **Data** for the full data grid, "
-        "**Audience Simulator** for audience recommendations, "
-        "and **Data Quality** for health checks. Adjust filters in the sidebar."
-    )
 
     # ── Load raw CSV ──────────────────────────────────────────────────────────
     try:
@@ -1644,22 +1638,23 @@ if active_campaign == "SELECTCHK":
                 show_metric=_show_metric_val,
             )
             _tbl_h = max(300, min(680, 55 + len(tbl) * 32))
-            if show_lift:
-                st.caption(
-                    "**Blank cells** = fewer than 30 customers in that segment × communication (too small to trust)."
-                )
             components.html(html_tbl, height=_tbl_h, scrolling=True)
 
             # ── Downloads ────────────────────────────────────────────────────
             _, _sdl_col, _ = st.columns([2, 3, 2])
             _sdl_col.download_button(
-                label="⬇ Download Excel",
+                label="Download Excel",
                 data=build_excel(tbl, ordered_comms),
                 file_name="selectchk_segment_lift.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True,
                 key="selectchk_dl_xlsx",
             )
+
+            if show_lift:
+                st.caption(
+                    "**Blank cells** = fewer than 30 customers in that segment × communication (too small to trust)."
+                )
 
             if show_lift:
                 with st.expander("How to read Lift \u00b1 CI", expanded=False):
@@ -1721,7 +1716,7 @@ if active_campaign == "SELECTCHK":
                 "Optimal segment groupings for each communication, ranked by lift. "
                 "Use these as ready-made targeting lists — no manual segment selection needed."
             )
-            with st.expander("ℹ️ How the audience is built", expanded=False):
+            with st.expander("How the audience is built", expanded=False):
                 st.markdown("""
     **Step 1 — AND filter (optional)**  
     If you pick any *AND — mandatory segments*, only customers who belong to **all** of them are kept. Everything downstream (audience size, lift, N) is computed on this restricted pool.
@@ -2076,7 +2071,7 @@ if active_campaign == "SELECTCHK":
             if _ra_shown_segs:
                 st.markdown(
                     '<style>div:has(>#_ra_send_anchor)+div[data-testid="element-container"]'
-                    '{margin-top:-16px!important}</style><div id="_ra_send_anchor"></div>',
+                    '{margin-top:-28px!important}</style><div id="_ra_send_anchor"></div>',
                     unsafe_allow_html=True,
                 )
                 _, _ra_btn_col, _ = st.columns([1, 2, 1])
@@ -3073,13 +3068,6 @@ if active_campaign == "SELECTCHK":
 # CC BALANCE TRANSFER CAMPAIGN
 # ══════════════════════════════════════════════════════════
 elif active_campaign == "CC_BT":
-    st.caption(
-        "Analyse which customer segments show the highest lift in Balance Transfer conversion rate — "
-        "the share of contacted customers who transferred debt to our credit card — and in average BT amount. "
-        "Use the sidebar to adjust the minimum-N threshold. "
-        "Use the **Segment Explorer** to browse segments, **Data** for the lift table, "
-        "**Audience Simulator** for audience recommendations, and **Data Quality** for health checks."
-    )
 
     # ── Load raw CSV ──────────────────────────────────────────────────────────
     try:
@@ -3223,7 +3211,7 @@ elif active_campaign == "CC_BT":
                 "Metric", ["BT Conversion Lift", "BT Amount Lift"],
                 horizontal=True, key="bt_metric_radio",
             )
-            _bt_show_n = _bt_mc2.checkbox("Show N columns", value=False, key="bt_show_n")
+            _bt_show_n = _bt_mc2.checkbox("Show N", value=False, key="bt_show_n")
 
             if _bt_metric == "BT Conversion Lift":
                 _val_col, _ci_col  = "conv_lift", "conv_lift_ci"
@@ -3242,15 +3230,14 @@ elif active_campaign == "CC_BT":
                 _fmt_fn    = lambda v: f"${v:,.0f}" if pd.notna(v) else ""
                 _lo, _hi   = -500, 2000
 
-            # Build display table
-            _disp_cols = [_t_col, _c_col, _val_col, _ci_col]
+            # Build display table — only lift + CI (+ N when requested)
+            _disp_cols = [_val_col, _ci_col]
             if _bt_show_n:
                 _disp_cols = ["n_treated", "n_control"] + _disp_cols
             _bt_disp = _bt_tbl[[c for c in _disp_cols if c in _bt_tbl.columns]].copy()
             _bt_disp.index = [str(x) for x in _bt_disp.index]
             _col_rename = {
                 "n_treated": "N (treated)", "n_control": "N (control)",
-                _t_col: _t_label, _c_col: _c_label,
                 _val_col: _val_label, _ci_col: "±CI",
             }
             _bt_disp = _bt_disp.rename(columns=_col_rename)
@@ -3262,7 +3249,7 @@ elif active_campaign == "CC_BT":
                     if isinstance(v, (int, float)) and not pd.isna(v) else ""
                 )
 
-            _fmt_map = {_t_label: _fmt_fn, _c_label: _fmt_fn, _val_label: _fmt_fn, "±CI": _fmt_fn}
+            _fmt_map = {_val_label: _fmt_fn, "±CI": _fmt_fn}
             _styled_bt = _bt_disp.style.format(_fmt_map, na_rep="")
             if "N (treated)" in _bt_disp.columns:
                 _styled_bt = _styled_bt.format(
@@ -3281,7 +3268,7 @@ elif active_campaign == "CC_BT":
             _bt_metric_key = "conv" if _bt_metric == "BT Conversion Lift" else "amt"
             _, _bt_btn_col, _ = st.columns([2, 3, 2])
             _bt_btn_col.download_button(
-                label="⬇ Download Excel",
+                label="Download Excel",
                 data=build_cc_bt_excel(_bt_tbl, _bt_metric_key),
                 file_name="cc_bt_segment_lift.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
