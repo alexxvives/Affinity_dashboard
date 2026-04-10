@@ -1241,10 +1241,8 @@ span[data-baseweb="tag"] button { color: #FAFAFA !important; }
 div.block-container { padding-top: 3rem !important; }
 </style>
 """, unsafe_allow_html=True)
-st.title("Affinity Explorer")
-
-# ── Campaign selector ─────────────────────────────────────────────────────────
-_camp_col, _ = st.columns([2, 5])
+_title_col, _camp_col, _ = st.columns([3, 2, 3])
+_title_col.title("Affinity Explorer")
 with _camp_col:
     active_campaign = st.selectbox(
         "Campaign",
@@ -1439,36 +1437,6 @@ if active_campaign == "SELECTCHK":
     # TABLE TAB
     # ══════════════════════════════════════════════════════════
     with tab_table:
-        with st.expander("How to read this table", expanded=False):
-            st.markdown("""
-    > All % changes are measured over the **7-day window** between start_date and end_date. Click any column header to sort. Hover over a segment ID for its description.
-
-    **Columns** show each communication touchpoint (day1, day5, …). Each cell is the **mean % change** in balance (or accounts) for customers in that segment who received that communication.
-
-    **Bal%** = `(end_balance − start_balance) / start_balance` measured over the 7-day window.  
-    **Acct%** = `(end_accounts − start_accounts) / start_accounts` over the same window.
-
-    **Lift** (enable with the toggle) = treatment group mean minus control group mean in the same segment.  
-    Positive lift = the communication *added* value beyond what would have happened anyway.  
-    Strong colour = statistically significant (95% CI does not cross zero). Muted = inconclusive.
-
-    **Colour scale**: Red = negative, Yellow = near zero, Green = positive. Scale is relative to the visible data range.
-
-    **Blank cells** = fewer customers than the minimum-N filter, or no data for that combination.  
-    **Click any column header** to sort. To reset to default order, reload the page (F5).
-
-    ---
-
-    **Communication checkboxes — standard mode (all unchecked)**  
-    Treatment = customers with `contact_flag=1` for that communication.  
-    Control = customers with `contact_flag=0` for that communication.  
-    Each column is independent. Confounding is possible if customers receive multiple communications that influence each other.
-
-    **Communication checkboxes — combo mode (one or more checked)**  
-    Treatment = customers with `contact_flag=1` for **all** checked communications.  
-    Control = customers with `contact_flag=0` for each respective communication.  
-    This answers: "Is receiving this specific combination of touch-points statistically significant vs receiving none of them?" It reduces journey confounding because you are comparing a tightly defined treatment group against a clean non-contacted baseline.
-            """)
         # ── Metric toggle ─────────────────────────────────────────────────────────
         _metric_opts = ["Balance only", "Balance & Accounts", "Accounts only"]
         _show_metric_radio = st.radio(
@@ -1510,7 +1478,7 @@ if active_campaign == "SELECTCHK":
         else:
             _combo_treated_keys = None
             ordered_comms = _all_present_comms[:]
-            st.caption("Standard mode — check one or more communication boxes above to activate combo mode.")
+            pass
 
         with st.spinner("Computing..."):
             tbl = build_table(df, ordered_comms, all_mode, min_n, bal_baseline_min,
@@ -1545,21 +1513,12 @@ if active_campaign == "SELECTCHK":
             components.html(html_tbl, height=_tbl_h, scrolling=True)
 
             # ── Downloads ────────────────────────────────────────────────────
-            _sdl1, _sdl2 = st.columns(2)
-            _sdl1.download_button(
-                label="↓ Download CSV",
-                data=tbl.reset_index().to_csv(index=True).encode(),
-                file_name="selectchk_segment_lift.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key="selectchk_dl_csv",
-            )
-            _sdl2.download_button(
+            st.download_button(
                 label="↓ Download Excel",
                 data=build_excel(tbl, ordered_comms),
                 file_name="selectchk_segment_lift.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                use_container_width=False,
                 key="selectchk_dl_xlsx",
             )
 
@@ -3102,22 +3061,13 @@ elif active_campaign == "CC_BT":
             )
 
             # ── Downloads (right below table, before chart) ───────────────────
-            _dl1, _dl2 = st.columns(2)
-            _dl1.download_button(
-                label="↓ Download CSV",
-                data=_bt_tbl.reset_index().to_csv(index=False).encode(),
-                file_name="cc_bt_segment_lift.csv",
-                mime="text/csv",
-                use_container_width=True,
-                key="bt_dl_csv",
-            )
             _bt_metric_key = "conv" if _bt_metric == "BT Conversion Lift" else "amt"
-            _dl2.download_button(
+            st.download_button(
                 label="↓ Download Excel",
                 data=build_cc_bt_excel(_bt_tbl, _bt_metric_key),
                 file_name="cc_bt_segment_lift.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
+                use_container_width=False,
                 key="bt_dl_xlsx",
             )
 
