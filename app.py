@@ -107,6 +107,30 @@ def _load_audience_profile(b: bytes) -> pd.DataFrame:
     if "n_products" not in aud.columns:
         present_prod_cols = [c for c in PRODUCT_COLS if c in aud.columns]
         aud["n_products"] = aud[present_prod_cols].sum(axis=1).astype(int)
+    # ── Momentum Matrix fields ─────────────────────────────────────────────
+    if "annual_revenue" not in aud.columns:
+        _rng_mm = np.random.default_rng(42)
+        aud["annual_revenue"] = (
+            aud["amount_deposit_spot_balance"].clip(lower=500) * 0.15
+            * _rng_mm.lognormal(0, 0.4, len(aud))
+        ).clip(2_000, 500_000).round(0).astype(int)
+    if "clv_2yr" not in aud.columns:
+        _rng_mm2 = np.random.default_rng(43)
+        aud["clv_2yr"] = (
+            aud["annual_revenue"] * 0.06
+            * _rng_mm2.lognormal(0, 0.35, len(aud))
+        ).clip(100, 30_000).round(0).astype(int)
+    if "churn_score" not in aud.columns:
+        _t_norm = (aud["tenure_years"].clip(0, 20) / 20).fillna(0.5)
+        _b_norm = (
+            np.log1p(aud["amount_deposit_spot_balance"].clip(lower=0))
+            / np.log1p(100_000)
+        ).fillna(0.5)
+        _rng_mm3 = np.random.default_rng(44)
+        _base_churn = (0.55 - 0.2 * _t_norm - 0.15 * _b_norm).clip(0.05, 0.90)
+        aud["churn_score"] = (
+            _base_churn + _rng_mm3.normal(0, 0.04, len(aud))
+        ).clip(0.05, 0.95).round(4)
     return aud
 
 
@@ -1399,6 +1423,301 @@ def _two_tables_html(items: list, height: int) -> str:
 
 
 # ══════════════════════════════════════════════════════════
+# MOMENTUM MATRIX
+# ══════════════════════════════════════════════════════════
+
+def _render_momentum_matrix(
+    campaign_raw_df: pd.DataFrame,
+    aud_df: pd.DataFrame,
+    campaign_type: str = "selectchk",
+    tab_key: str = "mm",
+) -> None:
+    """Render the Momentum Matrix 3×3 heatmap tab for the active campaign."""
+    import plotly.graph_objects as go  # noqa: F401 (px already at module level)
+
+    _METRIC_OPTS = {
+        "Current Revenue": "annual_revenue",
+        "CLV 2yr":         "clv_2yr",
+        "Churn Score":     "churn_score",
+    }
+    _METRIC_LABELS = list(_METRIC_OPTS.keys())
+    _BUCKET_LABELS  = ["Low", "Medium", "High"]
+
+    if aud_df is None or len(aud_df) == 0:
+        st.info("No audience profile data available. Please provide audience_profile.csv.")
+        return
+
+    # ── Axis selectors ──────────────────────────────────────────────────────
+    _ax1, _ax2, _ax3 = st.columns([1, 1, 3])
+    with _ax1:
+        _x_axis = st.radio("X-axis", _METRIC_LABELS, key=f"{tab_key}_xaxis")
+    with _ax2:
+        _y_default = 1 if _METRIC_LABELS.index(_x_axis) != 1 else 2
+        _y_axis = st.radio("Y-axis", _METRIC_LABELS, key=f"{tab_key}_yaxis", index=_y_default)
+
+    if _x_axis == _y_axis:
+        st.warning("Please choose different metrics for X and Y axes.")
+        return
+
+    _x_col = _METRIC_OPTS[_x_axis]
+    _y_col = _METRIC_OPTS[_y_axis]
+
+    for _req_col in [_x_col, _y_col]:
+        if _req_col not in aud_df.columns:
+            st.info(f"Audience profile is missing column `{_req_col}`. "
+                    "Re-upload audience_profile.csv or reload the app.")
+            return
+
+    # ── Build user-level campaign view ──────────────────────────────────────
+    if campaign_type == "selectchk":
+        _ucols = ["alpha_key", "Contact_flag", "start_balance", "end_balance", "nsegments"]
+        _ucols = [c for c in _ucols if c in campaign_raw_df.columns]
+        _ugrp = campaign_raw_df[_ucols].groupby("alpha_key", sort=False)
+        _user_df = _ugrp.agg(
+            treated=("Contact_flag", "max"),
+            mean_start=("start_balance", "mean"),
+            mean_end=("end_balance", "mean"),
+        ).reset_index()
+        _user_df["balance_lift"] = (
+            (_user_df["mean_end"] - _user_df["mean_start"])
+            / _user_df["mean_start"].clip(lower=1.0)
+        )
+        _outcome_col   = "balance_lift"
+        _outcome_label = "Avg balance lift (treated)"
+        _treat_col     = "treated"
+    else:
+        _user_df = campaign_raw_df[
+            ["alpha_key", "control_flag", "bt_flag", "bt_amount", "nsegments"]
+        ].copy()
+        _user_df["treated"]     = (1 - _user_df["control_flag"]).clip(0, 1)
+        _user_df["balance_lift"] = _user_df["bt_flag"]
+        _outcome_col   = "balance_lift"
+        _outcome_label = "BT conversion rate (treated)"
+        _treat_col     = "treated"
+
+    # ── Merge with audience profile ─────────────────────────────────────────
+    _aud_cols = ["alpha_key", _x_col, _y_col, "age", "gender", "tenure_years",
+                 "amount_deposit_spot_balance", "n_products"]
+    _aud_cols += [c for c in ["state"] if c in aud_df.columns]
+    _merged = _user_df.merge(
+        aud_df[[c for c in _aud_cols if c in aud_df.columns]],
+        on="alpha_key", how="inner",
+    )
+
+    if len(_merged) == 0:
+        st.warning("No matching users between campaign data and audience profile.")
+        return
+
+    # ── Bin axes into tertiles ──────────────────────────────────────────────
+    _merged["_xb"] = pd.qcut(_merged[_x_col], q=3, labels=_BUCKET_LABELS, duplicates="drop")
+    _merged["_yb"] = pd.qcut(_merged[_y_col], q=3, labels=_BUCKET_LABELS, duplicates="drop")
+
+    # ── Build pivot tables ──────────────────────────────────────────────────
+    _pivot_count = (
+        _merged.groupby(["_yb", "_xb"], observed=True)["alpha_key"]
+        .count()
+        .unstack("_xb")
+        .reindex(index=_BUCKET_LABELS, columns=_BUCKET_LABELS)
+        .fillna(0)
+        .astype(int)
+    )
+
+    _treated_only = _merged[_merged[_treat_col] == 1]
+    _pivot_metric = (
+        _treated_only.groupby(["_yb", "_xb"], observed=True)[_outcome_col]
+        .mean()
+        .unstack("_xb")
+        .reindex(index=_BUCKET_LABELS, columns=_BUCKET_LABELS)
+    )
+
+    # ── Color-by selector ───────────────────────────────────────────────────
+    _color_opts = ["Customer count", _outcome_label]
+    _color_by = st.radio("Color by", _color_opts, key=f"{tab_key}_colorby", horizontal=True)
+
+    if _color_by == "Customer count":
+        _z          = _pivot_count.values.tolist()
+        _colorscale = "Blues"
+        _fmt_fn     = lambda v: f"{int(v):,}" if not np.isnan(float(v)) else "—"
+    else:
+        _z          = _pivot_metric.values.tolist()
+        _colorscale = "RdYlGn"
+        if campaign_type == "cc_bt":
+            _fmt_fn = lambda v: f"{float(v):.1%}" if not np.isnan(float(v)) else "—"
+        else:
+            _fmt_fn = lambda v: f"{float(v):+.1%}" if not np.isnan(float(v)) else "—"
+
+    # ── Annotations: count + metric ─────────────────────────────────────────
+    _text = []
+    for _yl in _BUCKET_LABELS:
+        _row = []
+        for _xl in _BUCKET_LABELS:
+            _n   = int(_pivot_count.loc[_yl, _xl]) if (_yl in _pivot_count.index and _xl in _pivot_count.columns) else 0
+            _mv  = _pivot_metric.loc[_yl, _xl] if (_yl in _pivot_metric.index and _xl in _pivot_metric.columns) else float("nan")
+            _mv_str = _fmt_fn(_mv) if not pd.isna(_mv) else "—"
+            _row.append(f"n={_n:,}<br>{_mv_str}")
+        _text.append(_row)
+
+    # ── Render heatmap ───────────────────────────────────────────────────────
+    _fig_mm = go.Figure(go.Heatmap(
+        z=_z,
+        x=_BUCKET_LABELS,
+        y=_BUCKET_LABELS,
+        text=_text,
+        texttemplate="%{text}",
+        textfont={"size": 12},
+        colorscale=_colorscale,
+        showscale=True,
+        hovertemplate=(
+            f"{_x_axis}: %{{x}}<br>{_y_axis}: %{{y}}<br>"
+            f"Customers: %{{customdata}}<extra></extra>"
+        ),
+        customdata=_pivot_count.values.tolist(),
+    ))
+    _fig_mm.update_layout(
+        title=dict(
+            text=f"Momentum Matrix — <b>{_x_axis}</b> (X) × <b>{_y_axis}</b> (Y)",
+            font=dict(size=15),
+        ),
+        xaxis_title=_x_axis,
+        yaxis_title=_y_axis,
+        height=440,
+        margin=dict(l=70, r=40, t=70, b=60),
+        font=dict(size=13),
+    )
+
+    _sel = st.plotly_chart(_fig_mm, on_select="rerun", key=f"{tab_key}_heatmap",
+                           use_container_width=True)
+
+    # ── Details panel (after cell click) ───────────────────────────────────
+    _x_bucket = _y_bucket = None
+    if _sel and _sel.get("selection", {}).get("points"):
+        _pt        = _sel["selection"]["points"][0]
+        _x_bucket  = _pt.get("x")
+        _y_bucket  = _pt.get("y")
+
+    if _x_bucket and _y_bucket:
+        _subset = _merged[
+            (_merged["_xb"].astype(str) == str(_x_bucket))
+            & (_merged["_yb"].astype(str) == str(_y_bucket))
+        ]
+        _n_total   = len(_subset)
+        _n_treated = int((_subset[_treat_col] == 1).sum())
+
+        st.divider()
+        st.subheader(f"Bucket: {_y_axis} = **{_y_bucket}**  ·  {_x_axis} = **{_x_bucket}**")
+
+        _k1, _k2, _k3, _k4 = st.columns(4)
+        _k1.metric("Customers", f"{_n_total:,}")
+        _k2.metric("Treated", f"{_n_treated:,}")
+
+        _treated_sub = _subset[_subset[_treat_col] == 1]
+        if campaign_type == "selectchk":
+            _avg_lift = float(_treated_sub[_outcome_col].mean()) if len(_treated_sub) > 0 else float("nan")
+            _k3.metric("Avg balance lift", f"{_avg_lift:+.2%}" if not np.isnan(_avg_lift) else "—")
+            _k4.metric("Contact rate", f"{_n_treated / _n_total:.1%}" if _n_total > 0 else "—")
+        else:
+            _bt_rate = float(_treated_sub[_outcome_col].mean()) if len(_treated_sub) > 0 else float("nan")
+            _avg_amt = float(_treated_sub["bt_amount"].mean()) if ("bt_amount" in _treated_sub.columns and len(_treated_sub) > 0) else float("nan")
+            _k3.metric("BT rate (treated)", f"{_bt_rate:.1%}" if not np.isnan(_bt_rate) else "—")
+            _k4.metric("Avg BT amount", f"${_avg_amt:,.0f}" if not np.isnan(_avg_amt) else "—")
+
+        # ── Demographics ────────────────────────────────────────────────────
+        if len(_subset) > 0:
+            st.markdown("#### Demographics")
+            _dm1, _dm2, _dm3 = st.columns(3)
+
+            with _dm1:
+                _age_bins_s  = [18, 25, 35, 45, 55, 65, 75, 120]
+                _age_lbls_s  = ["18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"]
+                _sub_age     = pd.cut(_subset["age"], bins=_age_bins_s, labels=_age_lbls_s, right=False)
+                _age_d       = _sub_age.value_counts().reindex(_age_lbls_s).fillna(0).reset_index()
+                _age_d.columns = ["Age group", "Customers"]
+                _fig_age_s = px.bar(_age_d, x="Age group", y="Customers",
+                                    title="Age Distribution",
+                                    color="Customers", color_continuous_scale="Blues")
+                _fig_age_s.update_layout(height=270, margin=dict(l=10, r=10, t=40, b=30),
+                                          coloraxis_showscale=False, showlegend=False)
+                st.plotly_chart(_fig_age_s, use_container_width=True)
+
+            with _dm2:
+                _gender_d = _subset["gender"].fillna("Missing").value_counts().reset_index()
+                _gender_d.columns = ["Gender", "Count"]
+                _gcmap_s  = {"Male": "#89C4E1", "Female": "#FFB7C5", "Missing": "#CCCCCC"}
+                _fig_gen_s = go.Figure(go.Pie(
+                    labels=_gender_d["Gender"], values=_gender_d["Count"],
+                    hole=0.4,
+                    marker=dict(colors=[_gcmap_s.get(g, "#DDDDDD") for g in _gender_d["Gender"]]),
+                    textinfo="percent+label",
+                ))
+                _fig_gen_s.update_layout(title="Gender", height=270,
+                                          margin=dict(l=10, r=10, t=40, b=30))
+                st.plotly_chart(_fig_gen_s, use_container_width=True)
+
+            with _dm3:
+                _fig_ten_s = px.histogram(_subset, x="tenure_years", nbins=15,
+                                           title="Tenure Distribution",
+                                           labels={"tenure_years": "Tenure (years)"},
+                                           color_discrete_sequence=["#4C9BE8"])
+                _ten_med_s = float(_subset["tenure_years"].dropna().median()) if _subset["tenure_years"].notna().any() else 0.0
+                _fig_ten_s.add_vline(x=_ten_med_s, line=dict(color="red", width=2, dash="dash"),
+                                     annotation_text=f"Med: {_ten_med_s:.1f}y",
+                                     annotation_position="top right",
+                                     annotation_font=dict(color="red", size=11))
+                _fig_ten_s.update_layout(height=270, margin=dict(l=10, r=10, t=40, b=30))
+                st.plotly_chart(_fig_ten_s, use_container_width=True)
+
+            _dm4, _dm5, _dm6 = st.columns(3)
+
+            with _dm4:
+                _dep_p99_s = float(_subset["amount_deposit_spot_balance"].dropna().quantile(0.99) or 1.0)
+                _dep_sub   = _subset[_subset["amount_deposit_spot_balance"] <= _dep_p99_s]
+                _fig_dep_s = px.histogram(_dep_sub, x="amount_deposit_spot_balance", nbins=15,
+                                           title="Deposit Balance",
+                                           labels={"amount_deposit_spot_balance": "Balance ($)"},
+                                           color_discrete_sequence=["#F4A261"])
+                _dep_med_s = float(_subset["amount_deposit_spot_balance"].dropna().median()) if _subset["amount_deposit_spot_balance"].notna().any() else 0.0
+                _fig_dep_s.add_vline(x=_dep_med_s, line=dict(color="red", width=2, dash="dash"),
+                                     annotation_text=f"Med: ${_dep_med_s:,.0f}",
+                                     annotation_position="top right",
+                                     annotation_font=dict(color="red", size=11))
+                _fig_dep_s.update_xaxes(range=[0, _dep_p99_s])
+                _fig_dep_s.update_layout(height=270, margin=dict(l=10, r=10, t=40, b=30))
+                st.plotly_chart(_fig_dep_s, use_container_width=True)
+
+            with _dm5:
+                _nprod_d = _subset["n_products"].value_counts().sort_index().reset_index()
+                _nprod_d.columns = ["Products", "Customers"]
+                _fig_np_s = px.bar(_nprod_d, x="Products", y="Customers",
+                                    title="# Products Held",
+                                    color="Customers", color_continuous_scale="YlOrRd")
+                _fig_np_s.update_layout(height=270, margin=dict(l=10, r=10, t=40, b=30),
+                                         coloraxis_showscale=False)
+                st.plotly_chart(_fig_np_s, use_container_width=True)
+
+            with _dm6:
+                # Top segments in this bucket
+                _subset_keys = set(_subset["alpha_key"])
+                _seg_sub     = campaign_raw_df[campaign_raw_df["alpha_key"].isin(_subset_keys)]
+                _seg_series  = _seg_sub["nsegments"].apply(_try_parse_listlike).explode().dropna()
+                _seg_series  = _seg_series[_seg_series.astype(str).str.strip() != ""]
+                _seg_cnts    = _seg_series.value_counts().head(10).reset_index()
+                _seg_cnts.columns = ["Segment", "Customers"]
+                _seg_cnts["Label"] = _seg_cnts["Segment"].apply(
+                    lambda s: (SEGMENT_LABELS.get(str(s), str(s)) or str(s))[:22]
+                )
+                _fig_segs_s = px.bar(_seg_cnts, x="Customers", y="Label", orientation="h",
+                                      title="Top 10 Segments",
+                                      labels={"Label": "Segment"},
+                                      color="Customers", color_continuous_scale="Teal")
+                _fig_segs_s.update_layout(height=270, margin=dict(l=10, r=10, t=40, b=30),
+                                           coloraxis_showscale=False,
+                                           yaxis=dict(categoryorder="total ascending"))
+                st.plotly_chart(_fig_segs_s, use_container_width=True)
+    else:
+        st.info("Click a cell in the matrix to drill down into the customer details for that bucket.")
+
+
+# ══════════════════════════════════════════════════════════
 # SELECTCHK CAMPAIGN
 # ══════════════════════════════════════════════════════════
 if active_campaign == "SELECTCHK":
@@ -1479,11 +1798,12 @@ if active_campaign == "SELECTCHK":
         ordered_comms = _all_present_comms[:]
 
     # ── Tabs ──────────────────────────────────────────────────────────────────────
-    tab_explorer, tab_table, tab_simulator, tab_audit = st.tabs([
+    tab_explorer, tab_table, tab_simulator, tab_audit, tab_matrix = st.tabs([
         "Segment Explorer",
         "Data",
         "Audience Simulator",
         "Data Quality",
+        "Momentum Matrix",
     ])
 
 
@@ -3063,6 +3383,11 @@ if active_campaign == "SELECTCHK":
                     st.markdown(f"**Top 10 — {_fc} Lift Acct**")
                     if _fc: _top_tbl(f"{_fc}_lift_acct", "Lift Acct")
 
+    with tab_matrix:
+        _render_momentum_matrix(
+            df_raw, _aud_df, campaign_type="selectchk", tab_key="mm_schk"
+        )
+
 
 # ══════════════════════════════════════════════════════════
 # CC BALANCE TRANSFER CAMPAIGN
@@ -3126,11 +3451,12 @@ elif active_campaign == "CC_BT":
     _bt_tbl = agg_cc_bt(_bt_df, min_n=30)
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
-    _bt_tab_explorer, _bt_tab_data, _bt_tab_sim, _bt_tab_dq = st.tabs([
+    _bt_tab_explorer, _bt_tab_data, _bt_tab_sim, _bt_tab_dq, _bt_tab_matrix = st.tabs([
         "Segment Explorer",
         "Data",
         "Audience Simulator",
         "Data Quality",
+        "Momentum Matrix",
     ])
 
     # ════ SEGMENT EXPLORER TAB ════════════════════════════════════════════════
@@ -3824,3 +4150,8 @@ elif active_campaign == "CC_BT":
                         _top_amt_bt["N (treated)"] = _top_amt_bt["N (treated)"].map("{:,.0f}".format)
                         st.markdown("**Top 10 segments — BT Amount Lift**")
                         st.dataframe(_top_amt_bt, width='stretch')
+
+    with _bt_tab_matrix:
+        _render_momentum_matrix(
+            _bt_raw, _aud_df, campaign_type="cc_bt", tab_key="mm_ccbt"
+        )
