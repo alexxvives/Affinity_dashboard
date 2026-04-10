@@ -126,8 +126,16 @@ def _load_cc_bt(b: bytes) -> pd.DataFrame:
 
 
 @st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
-def preprocess_cc_bt(df_raw: pd.DataFrame) -> pd.DataFrame:
+def preprocess_cc_bt(df_raw: pd.DataFrame,
+                     date_min: Optional[str] = None,
+                     date_max: Optional[str] = None) -> pd.DataFrame:
     df = df_raw.copy()
+    if "bt_date" in df.columns and (date_min or date_max):
+        df["bt_date"] = pd.to_datetime(df["bt_date"], errors="coerce")
+        if date_min:
+            df = df[df["bt_date"] >= pd.Timestamp(date_min)]
+        if date_max:
+            df = df[df["bt_date"] <= pd.Timestamp(date_max)]
     df["nsegments"] = df["nsegments"].apply(_try_parse_listlike)
     df["nsegments"] = df["nsegments"].apply(lambda xs: xs if xs else ["__NO_SEGMENT__"])
     df = df.explode("nsegments").rename(columns={"nsegments": "nsegment"})
@@ -3092,15 +3100,42 @@ elif active_campaign == "CC_BT":
 
     # ── Sidebar ───────────────────────────────────────────────────────────────
     with st.sidebar:
+        # ── Segment lookup ────────────────────────────────────────────────────
         _seg_lookup_widget(_bt_all_seg_ids, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS)
-        bt_min_n = st.slider(
-            "Minimum N (treated)", min_value=5, max_value=200, value=30, step=5,
-            help="Segments with fewer treated customers are hidden from the table.",
-        )
+
+        # ── Date range (shown only when bt_date column exists) ────────────────
+        _bt_has_date = "bt_date" in _bt_raw.columns
+        _bt_date_from = _bt_date_to = None
+        if _bt_has_date:
+            st.subheader("Date range")
+            _bt_dates = pd.to_datetime(_bt_raw["bt_date"], errors="coerce").dropna()
+            _bt_d_min = _bt_dates.min().date()
+            _bt_d_max = _bt_dates.max().date()
+            _bt_dcol1, _bt_dcol2 = st.columns(2)
+            with _bt_dcol1:
+                _bt_date_from = st.date_input("From", value=_bt_d_min, min_value=_bt_d_min,
+                                              max_value=_bt_d_max, key="bt_date_from")
+            with _bt_dcol2:
+                _bt_date_to = st.date_input("To", value=_bt_d_max, min_value=_bt_d_min,
+                                            max_value=_bt_d_max, key="bt_date_to")
+            st.divider()
+
+        with st.expander("Advanced settings", expanded=False):
+            st.caption(
+                "**Minimum N** — segments with fewer than **30** treated customers are hidden "
+                "from the table. Too few observations make the mean unreliable and the CI very wide."
+            )
+            if _bt_has_date:
+                st.caption(
+                    "**Date range** — filters rows to customers whose balance transfer date "
+                    "falls within the selected window."
+                )
 
     # ── Explode & aggregate ───────────────────────────────────────────────────
-    _bt_df  = preprocess_cc_bt(_bt_raw)
-    _bt_tbl = agg_cc_bt(_bt_df, min_n=bt_min_n)
+    _bt_df  = preprocess_cc_bt(_bt_raw,
+                                date_min=str(_bt_date_from) if _bt_date_from else None,
+                                date_max=str(_bt_date_to) if _bt_date_to else None)
+    _bt_tbl = agg_cc_bt(_bt_df, min_n=30)
 
     # ── Tabs ──────────────────────────────────────────────────────────────────
     _bt_tab_explorer, _bt_tab_data, _bt_tab_sim, _bt_tab_dq = st.tabs([
@@ -3668,8 +3703,10 @@ elif active_campaign == "CC_BT":
                         st.info("No demographic records for the selected segments.")
                     else:
                         _bpk1, _bpk2, _bpk3, _bpk4 = st.columns(4)
-                        _bpk1.metric("Audience size", f"{len(_bt_aud2):,}")
+                        _bpk1.metric("Customers with profile data", f"{len(_bt_aud2):,}",
+                                     help="Customers from audience_profile.csv matched to this audience. May be a subset of the full campaign audience.")
                         _bpk2.metric("Median age",    f"{_bt_aud2['age'].median():.0f} yrs" if "age" in _bt_aud2.columns else "—")
+
                         _bpk3.metric("Median tenure", f"{_bt_aud2['tenure_years'].median():.1f} yrs" if "tenure_years" in _bt_aud2.columns else "—")
                         _bpk4.metric("Median SoW",    f"{_bt_aud2['sow'].median()*100:.0f}%" if "sow" in _bt_aud2.columns else "—")
                         import plotly.graph_objects as _go_bt2

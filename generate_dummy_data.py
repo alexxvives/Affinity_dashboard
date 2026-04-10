@@ -199,6 +199,9 @@ def generate_cc_bt_campaign_data(n_users: int = 5000, seed: int = 42) -> pd.Data
         "BT_amount":    BT_amount,
         "BT_flag":      BT_flag,
         "nsegments":    nsegments,
+        "bt_date": pd.to_datetime("2025-01-01") + pd.to_timedelta(
+            rng.integers(0, 365, size=n_users), unit="D"
+        ),
     })
 
 
