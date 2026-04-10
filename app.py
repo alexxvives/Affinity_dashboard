@@ -786,7 +786,7 @@ def _styled_html_table(
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
                     color: #ccc !important; font-weight: normal; cursor: help;
-                    padding: 4px 24px 4px 12px; min-width: 90px; }}
+                    padding: 4px 10px 4px 8px; min-width: 70px; }}
   th.blank {{ background: #262730 !important; }}
 </style></head><body>
 <div style="overflow:auto; max-height:{height - 20}px;">{html}</div>
@@ -1259,6 +1259,136 @@ try:
         _aud_df = _load_audience_profile(_f.read())
 except FileNotFoundError:
     _aud_df = None
+
+# ── shared multi-table HTML renderer used by all campaign branches ───────────
+def _two_tables_html(items: list, height: int) -> str:
+    """Render multiple (label, styler) pairs into one HTML doc — zero spacing between tables."""
+    import re as _re3
+    _css = (
+        "* { box-sizing: border-box; }"
+        "body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;"
+        "       font-size: 12px; background: transparent; color: #fafafa; margin: 0; padding: 4px; }"
+        "table { border-collapse: collapse; width: 100%; table-layout: fixed; }"
+        "thead th { background: #262730; color: #fafafa; padding: 6px 10px;"
+        "           text-align: left; position: sticky; top: 0; z-index: 2;"
+        "           border-bottom: 2px solid #555; white-space: nowrap; font-size: 11px; }"
+        "tbody td { padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; color: #111; }"
+        "tbody td:first-child { white-space: normal; word-break: break-word; }"
+        "tbody tr:hover td { outline: 1px solid #666; }"
+        "th.row_heading { background: #1c1e2a !important; font-size: 11px;"
+        "                 color: #ccc !important; font-weight: normal; cursor: help;"
+        "                 padding: 4px 10px 4px 8px; min-width: 70px; }"
+        "th.blank { background: #262730 !important; }"
+        ".tbl-lbl { font-size: 11px; font-weight: 600; color: #bbb;"
+        "           padding: 6px 2px 2px 2px; margin-top: 2px; }"
+        ".tbl-lbl:first-child { margin-top: 0; padding-top: 2px; }"
+    )
+    _blocks = []
+    for _item in items:
+        _lbl = _item[0]; _styler = _item[1]
+        _warn_p = _item[2] if len(_item) > 2 else None
+        _h = _styler.to_html()
+        if _warn_p:
+            _h = _inject_warn_flags(_h, _styler.data, _warn_p)
+        def _tip(m):
+            _tp = m.group(1); _cv = m.group(2); _id = _cv.strip()
+            _l = (SEGMENT_LABELS or {}).get(_id, ""); _d2 = (SEGMENT_DESCRIPTIONS or {}).get(_id, "")
+            _t = f"{_l} \u2014 {_d2}" if _l and _d2 else (_l or _d2)
+            if not _t: return m.group(0)
+            return f'{_tp} data-tip="{_t.replace(chr(34), chr(39))}">{_cv}</th>'
+        _h = _re3.sub(r'(<th[^>]*class="[^"]*row_heading[^"]*"[^>]*)>([^<]*)</th>', _tip, _h)
+        _ncols_inj = 1 + len(_styler.data.columns)
+        _pct_map = {5: [10, 46, 16, 18, 10], 4: [14, 42, 25, 19], 6: [10, 30, 16, 18, 16, 10]}
+        _col_pcts = _pct_map.get(_ncols_inj, [round(100 / _ncols_inj)] * _ncols_inj)
+        _cg = '<colgroup>' + ''.join(f'<col style="width:{p}%">' for p in _col_pcts) + '</colgroup>'
+        _h = _re3.sub(r'(<table[^>]*>)', r'\1' + _cg, _h, count=1)
+        _blocks.append(f'<div class="tbl-lbl">{_lbl}</div>{_h}')
+    _body = "".join(_blocks)
+    _js = (
+        "(function(){var tt=document.createElement('div');"
+        "tt.style.cssText='position:fixed;background:#1e2030;color:#eee;font-size:11px;"
+        "padding:5px 9px;border-radius:4px;border:1px solid #555;z-index:99999;"
+        "pointer-events:none;display:none;max-width:340px;word-wrap:break-word;"
+        "line-height:1.5;white-space:normal;box-shadow:0 2px 8px rgba(0,0,0,.5);';"
+        "document.body.appendChild(tt);"
+        "document.querySelectorAll('[data-tip]').forEach(function(el){"
+        "el.addEventListener('mouseenter',function(){tt.textContent=el.getAttribute('data-tip');tt.style.display='block';});"
+        "el.addEventListener('mousemove',function(e){tt.style.left=(e.clientX+14)+'px';tt.style.top=(e.clientY+14)+'px';});"
+        "el.addEventListener('mouseleave',function(){tt.style.display='none';});"
+        "})})()"
+    )
+    return (
+        f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<style>{_css}</style></head><body>"
+        f"<div style='overflow:auto;max-height:{height-20}px;'>{_body}</div>"
+        f"<script>{_js}</script></body></html>"
+    )
+
+
+# ── shared multi-table HTML renderer used by all campaign branches ─────────────
+def _two_tables_html(items: list, height: int) -> str:
+    """Render multiple (label, styler) pairs into one HTML doc — zero spacing between tables."""
+    import re as _re3
+    _css = (
+        "* { box-sizing: border-box; }"
+        "body { font-family: -apple-system, BlinkMacSystemFont, sans-serif;"
+        "       font-size: 12px; background: transparent; color: #fafafa; margin: 0; padding: 4px; }"
+        "table { border-collapse: collapse; width: 100%; table-layout: fixed; }"
+        "thead th { background: #262730; color: #fafafa; padding: 6px 10px;"
+        "           text-align: left; position: sticky; top: 0; z-index: 2;"
+        "           border-bottom: 2px solid #555; white-space: nowrap; font-size: 11px; }"
+        "tbody td { padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; color: #111; }"
+        "tbody td:first-child { white-space: normal; word-break: break-word; }"
+        "tbody tr:hover td { outline: 1px solid #666; }"
+        "th.row_heading { background: #1c1e2a !important; font-size: 11px;"
+        "                 color: #ccc !important; font-weight: normal; cursor: help;"
+        "                 padding: 4px 10px 4px 8px; min-width: 70px; }"
+        "th.blank { background: #262730 !important; }"
+        ".tbl-lbl { font-size: 11px; font-weight: 600; color: #bbb;"
+        "           padding: 6px 2px 2px 2px; margin-top: 2px; }"
+        ".tbl-lbl:first-child { margin-top: 0; padding-top: 2px; }"
+    )
+    _blocks = []
+    for _item in items:
+        _lbl = _item[0]; _styler = _item[1]
+        _warn_p = _item[2] if len(_item) > 2 else None
+        _h = _styler.to_html()
+        if _warn_p:
+            _h = _inject_warn_flags(_h, _styler.data, _warn_p)
+        def _tip(m):
+            _tp = m.group(1); _cv = m.group(2); _id = _cv.strip()
+            _l = (SEGMENT_LABELS or {}).get(_id, ""); _d2 = (SEGMENT_DESCRIPTIONS or {}).get(_id, "")
+            _t = f"{_l} \u2014 {_d2}" if _l and _d2 else (_l or _d2)
+            if not _t: return m.group(0)
+            return f'{_tp} data-tip="{_t.replace(chr(34), chr(39))}">{_cv}</th>'
+        _h = _re3.sub(r'(<th[^>]*class="[^"]*row_heading[^"]*"[^>]*)>([^<]*)</th>', _tip, _h)
+        _ncols_inj = 1 + len(_styler.data.columns)
+        _pct_map = {5: [10, 46, 16, 18, 10], 4: [14, 42, 25, 19], 6: [10, 30, 16, 18, 16, 10]}
+        _col_pcts = _pct_map.get(_ncols_inj, [round(100 / _ncols_inj)] * _ncols_inj)
+        _cg = '<colgroup>' + ''.join(f'<col style="width:{p}%">' for p in _col_pcts) + '</colgroup>'
+        _h = _re3.sub(r'(<table[^>]*>)', r'\1' + _cg, _h, count=1)
+        _blocks.append(f'<div class="tbl-lbl">{_lbl}</div>{_h}')
+    _body = "".join(_blocks)
+    _js = (
+        "(function(){var tt=document.createElement('div');"
+        "tt.style.cssText='position:fixed;background:#1e2030;color:#eee;font-size:11px;"
+        "padding:5px 9px;border-radius:4px;border:1px solid #555;z-index:99999;"
+        "pointer-events:none;display:none;max-width:340px;word-wrap:break-word;"
+        "line-height:1.5;white-space:normal;box-shadow:0 2px 8px rgba(0,0,0,.5);';"
+        "document.body.appendChild(tt);"
+        "document.querySelectorAll('[data-tip]').forEach(function(el){"
+        "el.addEventListener('mouseenter',function(){tt.textContent=el.getAttribute('data-tip');tt.style.display='block';});"
+        "el.addEventListener('mousemove',function(e){tt.style.left=(e.clientX+14)+'px';tt.style.top=(e.clientY+14)+'px';});"
+        "el.addEventListener('mouseleave',function(){tt.style.display='none';});"
+        "})})()"
+    )
+    return (
+        f"<!DOCTYPE html><html><head><meta charset='utf-8'>"
+        f"<style>{_css}</style></head><body>"
+        f"<div style='overflow:auto;max-height:{height-20}px;'>{_body}</div>"
+        f"<script>{_js}</script></body></html>"
+    )
+
 
 # ══════════════════════════════════════════════════════════
 # SELECTCHK CAMPAIGN
@@ -1864,7 +1994,7 @@ if active_campaign == "SELECTCHK":
                         "tbody tr:hover td { outline: 1px solid #666; }"
                         "th.row_heading { background: #1c1e2a !important; font-size: 11px;"
                         "                 color: #ccc !important; font-weight: normal; cursor: help;"
-                        "                 padding: 4px 24px 4px 12px; min-width: 110px; }"
+                        "                 padding: 4px 10px 4px 8px; min-width: 70px; }"
                         "th.blank { background: #262730 !important; }"
                         ".tbl-lbl { font-size: 11px; font-weight: 600; color: #bbb;"
                         "           padding: 6px 2px 2px 2px; margin-top: 2px; }"
@@ -3146,44 +3276,265 @@ elif active_campaign == "CC_BT":
                 key="bt_dl_xlsx",
             )
 
+            # ── Recommended Audiences ────────────────────────────────────────
             st.divider()
-
-            # ── Bar chart: top 30 segments by lift ───────────────────────────
-            _chart_df = _bt_tbl[[_val_col, _ci_col]].dropna(subset=[_val_col]).copy()
-            _chart_df = (
-                _chart_df.sort_values(_val_col, ascending=False)
-                .head(30)
-                .reset_index()
-            )
-            _chart_df["label"] = _chart_df["nsegment"].map(
-                lambda x: f"{x}  {SEGMENT_LABELS.get(str(x), '')}"
-            )
-            _chart_df["color"] = (_chart_df[_val_col] > 0).map(
-                {True: "positive", False: "negative"}
-            )
-            _fig_bt = px.bar(
-                _chart_df,
-                x=_val_col, y="label",
-                orientation="h",
-                color="color",
-                color_discrete_map={"positive": "#63BE7B", "negative": "#F8696B"},
-                error_x=_ci_col,
-                title=f"Top 30 segments by {_val_label}",
-                labels={_val_col: _val_label, "label": ""},
-            )
-            _fig_bt.update_layout(
-                height=max(400, 22 * len(_chart_df)),
-                showlegend=False,
-                yaxis={"autorange": "reversed"},
-                margin={"l": 180},
-            )
-            if _bt_metric == "BT Conversion Lift":
-                _fig_bt.update_xaxes(tickformat=".1%")
+            st.markdown("### Recommended Audiences")
+            st.caption("Optimal segment groupings for the BT offer, ranked by lift. "
+                       "Use these as ready-made targeting lists — no manual segment selection needed.")
+            _bt_ra_c1, _bt_ra_c2, _bt_ra_c3 = st.columns([3, 3, 1])
+            with _bt_ra_c1:
+                _bt_ra_metric = st.radio("Optimise for", ["Conv Lift", "Amt Lift"],
+                                         horizontal=True, key="bt_ra_metric")
+            with _bt_ra_c2:
+                _bt_ra_all_opts = sorted(_bt_tbl.index.astype(str).tolist())
+                _bt_ra_and_segs = st.multiselect(
+                    "AND — mandatory segments", options=_bt_ra_all_opts,
+                    default=[s for s in st.session_state.get("bt_ra_and_segs", []) if s in _bt_ra_all_opts],
+                    key="bt_ra_and_segs")
+            with _bt_ra_c3:
+                _bt_ra_min_aud = st.number_input("Min audience", min_value=0, value=500, step=100, key="bt_ra_min_aud")
+            _bt_ra_val_col = "conv_lift" if _bt_ra_metric == "Conv Lift" else "amt_lift"
+            _bt_ra_ci_col  = "conv_lift_ci" if _bt_ra_metric == "Conv Lift" else "amt_lift_ci"
+            _bt_ra_label   = "Conv Lift" if _bt_ra_metric == "Conv Lift" else "Amt Lift ($)"
+            _bt_ra_lo      = -0.05 if _bt_ra_metric == "Conv Lift" else -500
+            _bt_ra_hi      = 0.15  if _bt_ra_metric == "Conv Lift" else 2000
+            _bt_ra_fmt     = ((lambda v: f"{v:.2%}" if pd.notna(v) else "")
+                              if _bt_ra_metric == "Conv Lift"
+                              else (lambda v: f"${v:,.0f}" if pd.notna(v) else ""))
+            _bt_ra_placeholder = st.empty()
+            _bt_ra_shown_segs: List[str] = []
+            _bt_ra_bot_segs:   List[str] = []
+            _bt_and_idx_ra:    List[str] = []
+            if _bt_ra_val_col in _bt_tbl.columns:
+                _bt_ra_placeholder.info("⧗ Building recommended audience…")
+                _bt_naive = _bt_tbl[_bt_ra_val_col].dropna()
+                _bt_naive.index = _bt_naive.index.astype(str)
+                _bt_sorted_ra = _bt_naive.sort_values(ascending=False)
+                _bt_treated_all = _bt_df[_bt_df["control_flag"] == 0]
+                _bt_and_str = set(str(s) for s in (_bt_ra_and_segs or []))
+                if _bt_and_str:
+                    _bt_csg = (_bt_treated_all[_bt_treated_all["nsegment"].astype(str).isin(_bt_and_str)]
+                               .groupby("alpha_key")["nsegment"].apply(lambda x: set(x.astype(str))))
+                    _bt_valid = _bt_csg[_bt_csg.apply(lambda s: _bt_and_str.issubset(s))].index
+                    _bt_treated_filt = _bt_treated_all[_bt_treated_all["alpha_key"].isin(_bt_valid)]
+                else:
+                    _bt_treated_filt = _bt_treated_all
+                _bt_sc = {str(s): set(_bt_treated_filt[_bt_treated_filt["nsegment"].astype(str) == str(s)]["alpha_key"])
+                           for s in _bt_sorted_ra.index}
+                _bt_and_idx_ra = [s for s in (_bt_ra_and_segs or []) if s in _bt_sorted_ra.index]
+                _bt_non_and   = _bt_sorted_ra[~_bt_sorted_ra.index.isin(_bt_and_idx_ra)]
+                _bt_bot_n     = max(3, min(15, max(1, len(_bt_non_and)) // 4))
+                _bt_ra_bot_ser = _bt_non_and.sort_values().head(_bt_bot_n)
+                _bt_not_strs  = set(str(s) for s in _bt_ra_bot_ser.index)
+                _bt_not_custs_ra: set = set()
+                for _bns in _bt_ra_bot_ser.index:
+                    _bt_not_custs_ra |= _bt_sc.get(str(_bns), set())
+                _bt_run_ra: set = ((set().union(*[_bt_sc[str(s)] for s in _bt_and_idx_ra]) - _bt_not_custs_ra)
+                                   if _bt_and_idx_ra else set())
+                _bt_sel_ra: List[str] = []
+                for _bts in _bt_non_and.index:
+                    if str(_bts) in _bt_not_strs:
+                        continue
+                    if len(_bt_run_ra) >= _bt_ra_min_aud:
+                        break
+                    _bt_sel_ra.append(_bts)
+                    _bt_run_ra |= (_bt_sc[str(_bts)] - _bt_not_custs_ra)
+                _bt_ra_top_idx = list(dict.fromkeys(_bt_and_idx_ra + _bt_sel_ra))
+                _bt_ra_top = _bt_sorted_ra.reindex([s for s in _bt_ra_top_idx if s in _bt_sorted_ra.index]).dropna()
+                _bt_final_custs = _bt_run_ra
+                _bt_ra_users = len(_bt_final_custs)
+                _bt_tc = _bt_treated_filt[_bt_treated_filt["alpha_key"].isin(_bt_final_custs)].drop_duplicates("alpha_key")
+                _bt_cc = _bt_df[(_bt_df["control_flag"] == 1) &
+                                (_bt_df["nsegment"].astype(str).isin([str(s) for s in _bt_ra_top_idx]))].drop_duplicates("alpha_key")
+                if _bt_ra_metric == "Conv Lift":
+                    _bt_tv  = _bt_tc["bt_flag"].mean() if not _bt_tc.empty else np.nan
+                    _bt_cv_ = _bt_cc["bt_flag"].mean() if not _bt_cc.empty else np.nan
+                else:
+                    _bt_tv  = _bt_tc[_bt_tc["bt_flag"] == 1]["bt_amount"].mean() if not _bt_tc.empty else np.nan
+                    _bt_cv_ = _bt_cc[_bt_cc["bt_flag"] == 1]["bt_amount"].mean() if not _bt_cc.empty else np.nan
+                _bt_w_lift = float(_bt_tv - _bt_cv_) if (pd.notna(_bt_tv) and pd.notna(_bt_cv_)) else np.nan
+                _bt_rm1, _bt_rm2 = st.columns(2)
+                _bt_rm1.metric("Recommended audience", f"{_bt_ra_users:,} customers")
+                _bt_rm2.metric(f"Expected {_bt_ra_label}", _bt_ra_fmt(_bt_w_lift),
+                               help="Treated audience mean minus matched-control mean — each customer counted once.")
+                def _bt_make_ra_table(series):
+                    _ci_v2 = (_bt_tbl[_bt_ra_ci_col].rename(index=str).reindex(series.index.astype(str)).values
+                              if _bt_ra_ci_col in _bt_tbl.columns else [np.nan] * len(series))
+                    _n_v2  = [int(_bt_tbl.at[s, "n_treated"]) if "n_treated" in _bt_tbl.columns and s in _bt_tbl.index else 0
+                              for s in series.index]
+                    _d2 = pd.DataFrame({
+                        "Description": [SEGMENT_DESCRIPTIONS.get(str(s), SEGMENT_LABELS.get(str(s), "")) for s in series.index],
+                        _bt_ra_label: series.values,
+                        "±CI": _ci_v2,
+                        "N": _n_v2,
+                    }, index=series.index)
+                    _d2.index.name = None
+                    return (_d2.style
+                            .format({_bt_ra_label: _bt_ra_fmt, "±CI": _bt_ra_fmt, "N": "{:,.0f}"}, na_rep="")
+                            .apply(lambda s: s.map(lambda v: _rdylgn(v, lo=_bt_ra_lo, hi=_bt_ra_hi)),
+                                   subset=[_bt_ra_label], axis=0)
+                            .apply(lambda s: s.map(_n_color), subset=["N"], axis=0))
+                _bt_ra_sty     = _bt_make_ra_table(_bt_ra_top)
+                _bt_ra_bot_sty = _bt_make_ra_table(_bt_ra_bot_ser)
+                _bt_ra_shown_segs = [str(s) for s in _bt_ra_top.index]
+                _bt_ra_bot_segs   = [str(s) for s in _bt_ra_bot_ser.index]
+                _bt_comb_h = max(300, min(900, 80 + (len(_bt_ra_top) + len(_bt_ra_bot_ser)) * 30))
+                components.html(
+                    _two_tables_html([
+                        (f"Top {len(_bt_ra_top)} segments (highest lift)", _bt_ra_sty, [(_bt_ra_label, "±CI")]),
+                        (f"Bottom {len(_bt_ra_bot_ser)} segments (lowest lift — suppressed)", _bt_ra_bot_sty, [(_bt_ra_label, "±CI")]),
+                    ], _bt_comb_h),
+                    height=_bt_comb_h, scrolling=True,
+                )
+                _bt_ra_placeholder.empty()
             else:
-                _fig_bt.update_xaxes(tickprefix="$", tickformat=",.0f")
-            st.plotly_chart(_fig_bt, use_container_width=True)
+                _bt_ra_placeholder.empty()
+                st.info(f"No {_bt_ra_label} data available.")
+            if _bt_ra_shown_segs:
+                _, _bt_ra_btn_col, _ = st.columns([1, 2, 1])
+                if _bt_ra_btn_col.button("Send to Audience Simulator", key="bt_ra_send_sim", use_container_width=True):
+                    st.session_state["bt_sim_segs"]          = _bt_ra_shown_segs
+                    st.session_state["bt_sim_segs_and"]      = _bt_and_idx_ra
+                    st.session_state["bt_sim_segs_excl"]     = _bt_ra_bot_segs
+                    st.session_state["bt_sim_run_triggered"] = True
+                    st.success(f"Sent {len(_bt_ra_shown_segs)} segments to Audience Simulator "
+                               f"(+ {len(_bt_ra_bot_segs)} excluded).")
+        # ── Audience Demographics (all customers in audience_profile.csv) ─────
+        if _aud_df is not None and len(_aud_df) > 0:
+            st.divider()
+            st.subheader("Audience Demographics — All Customers")
+            st.caption(f"{len(_aud_df):,} customers in audience_profile.csv")
+            import plotly.graph_objects as go
+            from scipy.stats import gaussian_kde as _gkde_dt
 
-    # ════ AUDIENCE SIMULATOR TAB ══════════════════════════════════════════════
+            def _kde_dt(series, nbins, line_color):
+                _v = series.dropna().values
+                if len(_v) < 5:
+                    return None
+                _, _edges = np.histogram(_v, bins=nbins)
+                _bw = _edges[1] - _edges[0]
+                _fn = _gkde_dt(_v)
+                _xs = np.linspace(_v.min(), _v.max(), 300)
+                _ys = _fn(_xs) * len(_v) * _bw
+                return go.Scatter(x=_xs, y=_ys, mode="lines",
+                                  line=dict(color=line_color, width=2.5),
+                                  showlegend=False, name="")
+
+            _d = _aud_df.copy()
+            _d1, _d2 = st.columns([3, 2])
+            with _d1:
+                _age_bins2   = [18, 25, 35, 45, 55, 65, 75, 120]
+                _age_labels2 = ["18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"]
+                _d["_age_group2"] = pd.cut(_d["age"], bins=_age_bins2, labels=_age_labels2, right=False)
+                _age_dist2 = (_d["_age_group2"].value_counts().reindex(_age_labels2).fillna(0).reset_index())
+                _age_dist2.columns = ["Age group", "Customers"]
+                _fig_age2 = px.bar(_age_dist2, x="Age group", y="Customers",
+                                   title="Age Distribution", color="Customers",
+                                   color_continuous_scale="Blues")
+                _fig_age2.add_scatter(x=_age_dist2["Age group"], y=_age_dist2["Customers"],
+                                      mode="lines+markers",
+                                      line=dict(color="#103060", width=2, shape="spline", smoothing=1.0),
+                                      marker=dict(size=6, color="#103060"), showlegend=False, name="")
+                _age_mean2 = float(_d["age"].dropna().mean())
+                _age_mean_bin2 = str(pd.cut([_age_mean2], bins=_age_bins2, labels=_age_labels2, right=False)[0])
+                _fig_age2.add_shape(type="line", xref="x", yref="paper",
+                                    x0=_age_mean_bin2, x1=_age_mean_bin2, y0=0, y1=1,
+                                    line=dict(color="red", width=2, dash="dash"))
+                _fig_age2.add_annotation(x=_age_mean_bin2, yref="paper", y=1.05,
+                                         text=f"Mean: {_age_mean2:.1f}y", showarrow=False,
+                                         xanchor="left", font=dict(color="red", size=11))
+                _fig_age2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
+                                        coloraxis_showscale=False, showlegend=False)
+                st.plotly_chart(_fig_age2, width='stretch')
+            with _d2:
+                _gender_counts2 = _d["gender"].fillna("Missing").value_counts().reset_index()
+                _gender_counts2.columns = ["Gender", "Count"]
+                _g_cmap2 = {"Male": "#89C4E1", "Female": "#FFB7C5", "Missing": "#CCCCCC"}
+                _fig_gender2 = go.Figure(go.Pie(
+                    labels=_gender_counts2["Gender"], values=_gender_counts2["Count"],
+                    hole=0.4,
+                    marker=dict(colors=[_g_cmap2.get(g, "#DDDDDD") for g in _gender_counts2["Gender"]]),
+                    textinfo="percent+label"))
+                _fig_gender2.update_layout(title=dict(text="Gender"), height=300,
+                                           margin=dict(l=20, r=20, t=50, b=30))
+                st.plotly_chart(_fig_gender2, width='stretch')
+            st.markdown("<br>", unsafe_allow_html=True)
+            _d3, _d4, _d5 = st.columns(3)
+            with _d3:
+                _fig_ten2 = px.histogram(_d, x="tenure_years", nbins=20, title="Tenure Distribution",
+                                         labels={"tenure_years": "Tenure (years)"},
+                                         color_discrete_sequence=["#4C9BE8"])
+                _k2 = _kde_dt(_d["tenure_years"], 20, "#1a3a6b")
+                if _k2:
+                    _fig_ten2.add_trace(_k2)
+                _ten_med2 = float(_d["tenure_years"].dropna().median())
+                _fig_ten2.add_vline(x=_ten_med2, line=dict(color="red", width=2, dash="dash"),
+                                    annotation_text=f"Median: {_ten_med2:.1f}y",
+                                    annotation_position="top right",
+                                    annotation_font=dict(color="red", size=11))
+                _fig_ten2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
+                st.plotly_chart(_fig_ten2, width='stretch')
+            with _d4:
+                _dep_p99 = float(_d["amount_deposit_spot_balance"].dropna().quantile(0.99))
+                _fig_dep2 = px.histogram(_d[_d["amount_deposit_spot_balance"] <= _dep_p99],
+                                         x="amount_deposit_spot_balance", nbins=25, title="Deposit Balance",
+                                         labels={"amount_deposit_spot_balance": "Balance ($)"},
+                                         color_discrete_sequence=["#F4A261"])
+                _k3 = _kde_dt(_d["amount_deposit_spot_balance"], 25, "#7a3100")
+                if _k3:
+                    _fig_dep2.add_trace(_k3)
+                _dep_med2 = float(_d["amount_deposit_spot_balance"].dropna().median())
+                _fig_dep2.add_vline(x=_dep_med2, line=dict(color="red", width=2, dash="dash"),
+                                    annotation_text=f"Median: ${_dep_med2:,.0f}",
+                                    annotation_position="top right",
+                                    annotation_font=dict(color="red", size=11))
+                _fig_dep2.update_xaxes(range=[0, _dep_p99])
+                _fig_dep2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
+                st.plotly_chart(_fig_dep2, width='stretch')
+            with _d5:
+                _state_cnt2 = _d["state"].value_counts().head(10).reset_index()
+                _state_cnt2.columns = ["State", "Customers"]
+                _fig_state2 = px.bar(_state_cnt2, x="Customers", y="State", orientation="h",
+                                     title="Top 10 States", color="Customers", color_continuous_scale="Teal")
+                _fig_state2.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
+                                          coloraxis_showscale=False,
+                                          yaxis=dict(categoryorder="total ascending"))
+                st.plotly_chart(_fig_state2, width='stretch')
+            st.markdown("<br>", unsafe_allow_html=True)
+            _d6, _d7 = st.columns(2)
+            with _d6:
+                _prod_cols_dt = [c for c in PRODUCT_COLS if c in _d.columns]
+                if _prod_cols_dt:
+                    _prod_rates2 = ((_d[_prod_cols_dt].mean() * 100).sort_values(ascending=True).reset_index())
+                    _prod_rates2.columns = ["Product", "% with product"]
+                    _fig_prods2 = px.bar(_prod_rates2, x="% with product", y="Product", orientation="h",
+                                         title="Product Ownership Rates", color="% with product",
+                                         color_continuous_scale="Purpor",
+                                         text=_prod_rates2["% with product"].map(lambda v: f"{v:.1f}%"))
+                    _fig_prods2.update_traces(textposition="outside")
+                    _fig_prods2.update_layout(height=340, margin=dict(l=20, r=80, t=40, b=20),
+                                              coloraxis_showscale=False,
+                                              xaxis=dict(ticksuffix="%", range=[0, 100]))
+                    st.plotly_chart(_fig_prods2, width='stretch')
+            with _d7:
+                _nprod_cnt2 = _d["n_products"].value_counts().sort_index().reset_index()
+                _nprod_cnt2.columns = ["Products", "Customers"]
+                _fig_np2 = px.bar(_nprod_cnt2, x="Products", y="Customers", title="# Products Held",
+                                   color="Customers", color_continuous_scale="YlOrRd")
+                _fig_np2.add_scatter(x=_nprod_cnt2["Products"], y=_nprod_cnt2["Customers"],
+                                      mode="lines+markers",
+                                      line=dict(color="#5a0000", width=2, shape="spline", smoothing=0.8),
+                                      marker=dict(size=6, color="#5a0000"), showlegend=False, name="")
+                _nprod_mean2 = float(_d["n_products"].dropna().mean())
+                _fig_np2.add_vline(x=_nprod_mean2, line=dict(color="red", width=2, dash="dash"),
+                                   annotation_text=f"Mean: {_nprod_mean2:.1f}",
+                                   annotation_position="top right",
+                                   annotation_font=dict(color="red", size=11))
+                _fig_np2.update_layout(height=340, margin=dict(l=20, r=20, t=50, b=30),
+                                        coloraxis_showscale=False)
+                st.plotly_chart(_fig_np2, width='stretch')
+
+    # ════ AUDIENCE SIMULATOR TAB ════════════════════════════════════════════════
     with _bt_tab_sim:
         st.subheader("Audience Performance Simulator")
         st.caption(
@@ -3194,70 +3545,196 @@ elif active_campaign == "CC_BT":
         if _bt_tbl.empty:
             st.warning("No table data — adjust the minimum-N filter in the sidebar first.")
         else:
-            _sim_opts = sorted(_bt_tbl.index.astype(str).tolist())
-            _bt_sim_segs = st.multiselect(
-                "Select segments to include in audience",
-                options=_sim_opts,
-                default=[],
+            _bt_sim_all = sorted(_bt_tbl.index.astype(str).tolist())
+            _bt_sim_or = st.multiselect(
+                "OR — segments to include (union)", options=_bt_sim_all,
+                default=[s for s in st.session_state.get("bt_sim_segs", []) if s in _bt_sim_all],
                 key="bt_sim_segs",
-                format_func=lambda x: (
-                    f"{x}  —  {SEGMENT_LABELS.get(str(x), '')}"
-                    if SEGMENT_LABELS.get(str(x)) else str(x)
-                ),
+                help="A customer qualifies if they belong to ANY of these segments.",
             )
-            if not _bt_sim_segs:
-                st.info("Select one or more segments above to run the simulation.")
-            else:
-                _sim_df = _bt_df[_bt_df["nsegment"].astype(str).isin(_bt_sim_segs)]
-                _sim_treated = _sim_df[_sim_df["control_flag"] == 0].drop_duplicates("alpha_key")
-                _sim_control = _sim_df[_sim_df["control_flag"] == 1].drop_duplicates("alpha_key")
-                _sim_n = len(_sim_treated)
-                _sim_conv_t = _sim_treated["bt_flag"].mean() if _sim_n > 0 else 0.0
-                _sim_conv_c = _sim_control["bt_flag"].mean() if len(_sim_control) > 0 else 0.0
-                _sim_lift = _sim_conv_t - _sim_conv_c
-                _sim_converters = _sim_treated[_sim_treated["bt_flag"] == 1]
-                _sim_avg_amt = _sim_converters["bt_amount"].mean() if not _sim_converters.empty else 0.0
-                _sim_incr_conv = int(_sim_n * max(0.0, _sim_lift))
-
-                _s1, _s2, _s3, _s4 = st.columns(4)
-                _s1.metric("Audience size", f"{_sim_n:,}")
-                _s2.metric("Expected BT rate", f"{_sim_conv_t:.1%}",
-                           delta=f"{_sim_lift:+.1%} vs control")
-                _s3.metric("Avg BT amount (converters)", f"${_sim_avg_amt:,.0f}")
-                _s4.metric("Projected incremental converters", f"{_sim_incr_conv:,}")
-
+            _bt_sim_and = st.multiselect(
+                "AND — must also be in (intersection)", options=_bt_sim_all,
+                default=[s for s in st.session_state.get("bt_sim_segs_and", []) if s in _bt_sim_all],
+                key="bt_sim_segs_and",
+                help="Only keeps customers in both OR and AND lists.",
+            )
+            _bt_sim_excl = st.multiselect(
+                "NOT — segments to exclude", options=_bt_sim_all,
+                default=[s for s in st.session_state.get("bt_sim_segs_excl", []) if s in _bt_sim_all],
+                key="bt_sim_segs_excl",
+                help="Removes these segments from the final audience.",
+            )
+            _bt_sim_eff = [s for s in (_bt_sim_or or [])
+                           if (not _bt_sim_and or s in _bt_sim_and) and s not in (_bt_sim_excl or [])]
+            if st.button("▶ Run simulation", key="bt_sim_run_btn", type="primary"):
+                st.session_state["bt_sim_run_triggered"] = True
+                st.session_state["_bt_sim_segs_snap"] = list(_bt_sim_eff)
+                st.session_state["_bt_sim_excl_snap"] = list(_bt_sim_excl or [])
+            _bt_compute_segs = st.session_state.get("_bt_sim_segs_snap", [])
+            _bt_compute_excl = st.session_state.get("_bt_sim_excl_snap", [])
+            if st.session_state.get("bt_sim_run_triggered") and _bt_compute_segs:
+                _bt_not_ids_sim: set = set(
+                    _bt_df[(_bt_df["control_flag"] == 0) &
+                           (_bt_df["nsegment"].astype(str).isin(_bt_compute_excl))]["alpha_key"]
+                ) if _bt_compute_excl else set()
+                _bt_users_base = _bt_df[
+                    (_bt_df["control_flag"] == 0) & (_bt_df["nsegment"].astype(str).isin(_bt_compute_segs))
+                ]["alpha_key"]
+                if _bt_not_ids_sim:
+                    _bt_users_base = _bt_users_base[~_bt_users_base.isin(_bt_not_ids_sim)]
+                _bt_total_users_sim = _bt_users_base.nunique()
+                _bt_tot_c1, _bt_tot_c2 = st.columns([2, 1])
+                _excl_note_sim = f" ({len(_bt_compute_excl)} excluded)" if _bt_compute_excl else ""
+                _bt_tot_c1.metric(f"Total unique customers (all selected segments){_excl_note_sim}",
+                                  f"{_bt_total_users_sim:,}")
+                _bt_sim_metric = _bt_tot_c2.radio("Metric", ["Conv Lift", "Amt Lift"],
+                                                  horizontal=True, key="bt_sim_metric")
+                _bt_sim_treated = (_bt_df[(_bt_df["control_flag"] == 0) &
+                                          (_bt_df["nsegment"].astype(str).isin(_bt_compute_segs))]
+                                   .drop_duplicates("alpha_key"))
+                if _bt_not_ids_sim:
+                    _bt_sim_treated = _bt_sim_treated[~_bt_sim_treated["alpha_key"].isin(_bt_not_ids_sim)]
+                _bt_sim_control = (_bt_df[(_bt_df["control_flag"] == 1) &
+                                          (_bt_df["nsegment"].astype(str).isin(_bt_compute_segs))]
+                                   .drop_duplicates("alpha_key"))
+                _bt_rate_t = _bt_sim_treated["bt_flag"].mean() if not _bt_sim_treated.empty else np.nan
+                _bt_rate_c = _bt_sim_control["bt_flag"].mean() if not _bt_sim_control.empty else np.nan
+                _bt_lift_s = float(_bt_rate_t - _bt_rate_c) if (pd.notna(_bt_rate_t) and pd.notna(_bt_rate_c)) else np.nan
+                _bt_conv_t = _bt_sim_treated[_bt_sim_treated["bt_flag"] == 1]
+                _bt_avg_amt_s  = _bt_conv_t["bt_amount"].mean() if not _bt_conv_t.empty else 0.0
+                _bt_incr_conv_s = int(len(_bt_sim_treated) * max(0.0, _bt_lift_s)) if pd.notna(_bt_lift_s) else 0
+                _bt_incr_amt_s  = _bt_incr_conv_s * _bt_avg_amt_s
+                st.markdown("#### Expected lift across selected segments")
+                _sk1, _sk2, _sk3, _sk4 = st.columns(4)
+                _sk1.metric("Audience size",         f"{len(_bt_sim_treated):,}")
+                _sk2.metric("BT rate (treated)",     f"{_bt_rate_t:.1%}" if pd.notna(_bt_rate_t) else "—",
+                            delta=f"{_bt_lift_s:+.1%} vs control" if pd.notna(_bt_lift_s) else "")
+                _sk3.metric("Avg BT amount",         f"${_bt_avg_amt_s:,.0f}")
+                _sk4.metric("Projected incr. conv.", f"{_bt_incr_conv_s:,}")
+                st.markdown("#### Projected absolute impact")
+                _sp1, _sp2, _sp3 = st.columns(3)
+                _sp1.metric("Incremental BT amount", f"${_bt_incr_amt_s:,.0f}" if _bt_incr_amt_s else "—",
+                            help="Projected converters × avg BT amount.")
+                _sp2.metric("BT rate (control)",     f"{_bt_rate_c:.1%}" if pd.notna(_bt_rate_c) else "—")
+                _sp3.metric("BT rate lift",          f"{_bt_lift_s:.1%}" if pd.notna(_bt_lift_s) else "—")
                 st.divider()
-                st.markdown("**Per-segment breakdown**")
-                _sim_bd_cols = [c for c in [
-                    "conv_treated", "conv_control", "conv_lift", "conv_lift_ci",
-                    "n_treated", "n_control",
-                ] if c in _bt_tbl.columns]
-                _sim_breakdown = _bt_tbl.loc[
-                    _bt_tbl.index.astype(str).isin(_bt_sim_segs), _sim_bd_cols
+                _bt_h_col_sim, _ = st.columns([3, 1])
+                _bt_h_col_sim.markdown("#### Per-segment breakdown")
+                _bt_sim_metric_key = "conv" if _bt_sim_metric == "Conv Lift" else "amt"
+                _bt_intl_cols_sim = [c for c in
+                    [f"{_bt_sim_metric_key}_lift", f"{_bt_sim_metric_key}_lift_ci", "n_treated"]
+                    if c in _bt_tbl.columns]
+                _bt_all_detail = list(dict.fromkeys(
+                    list(_bt_sim_or or []) + list(_bt_sim_and or []) + list(_bt_sim_excl or [])))
+                _bt_detail = _bt_tbl.loc[
+                    _bt_tbl.index.astype(str).isin(_bt_all_detail),
+                    [c for c in _bt_intl_cols_sim if c in _bt_tbl.columns],
                 ].copy()
-                _sim_breakdown.index = [
-                    f"{x}  —  {SEGMENT_LABELS.get(str(x), '')}"
-                    if SEGMENT_LABELS.get(str(x)) else str(x)
-                    for x in _sim_breakdown.index
-                ]
-                _sim_bd_rename = {
-                    "conv_treated": "Conv % (treated)", "conv_control": "Conv % (control)",
-                    "conv_lift": "Conv Lift", "conv_lift_ci": "±CI",
-                    "n_treated": "N (treated)", "n_control": "N (control)",
-                }
-                _sim_breakdown = _sim_breakdown.rename(columns=_sim_bd_rename)
-                _pct_fmt_sim = lambda v: f"{v:.2%}" if pd.notna(v) else ""
-                _sim_style = _sim_breakdown.style.format(
-                    {c: _pct_fmt_sim for c in [
-                        "Conv % (treated)", "Conv % (control)", "Conv Lift", "±CI"
-                    ] if c in _sim_breakdown.columns},
+                _bt_detail.index.name = None
+                _bt_lift_lbl_sim = "Conv Lift" if _bt_sim_metric == "Conv Lift" else "Amt Lift ($)"
+                _bt_detail = _bt_detail.rename(columns={
+                    f"{_bt_sim_metric_key}_lift": _bt_lift_lbl_sim,
+                    f"{_bt_sim_metric_key}_lift_ci": "±CI",
+                    "n_treated": "N (treated)",
+                })
+                _bt_sim_excl_set = set(str(s) for s in (_bt_sim_excl or []))
+                _bt_sim_and_set  = set(str(s) for s in (_bt_sim_and  or []))
+                def _bt_get_role(seg):
+                    s = str(seg)
+                    if s in _bt_sim_excl_set: return "NOT"
+                    if s in _bt_sim_and_set:  return "AND"
+                    return "OR"
+                _bt_detail.insert(0, "Role", [_bt_get_role(s) for s in _bt_detail.index])
+                _bt_detail = (_bt_detail.assign(_rs=_bt_detail["Role"].map({"AND": 0, "OR": 1, "NOT": 2}))
+                              .sort_values("_rs").drop(columns="_rs"))
+                _bt_fmt_sim = ((lambda v: f"{v:.2%}" if pd.notna(v) else "")
+                               if _bt_sim_metric == "Conv Lift"
+                               else (lambda v: f"${v:,.0f}" if pd.notna(v) else ""))
+                _bt_sty_sim = _bt_detail.style.format(
+                    {c: _bt_fmt_sim for c in [_bt_lift_lbl_sim, "±CI"] if c in _bt_detail.columns}
+                    | ({"N (treated)": "{:,.0f}"} if "N (treated)" in _bt_detail.columns else {}),
                     na_rep="",
                 )
-                _sim_h = max(200, min(600, 60 + len(_sim_breakdown) * 26))
+                if _bt_lift_lbl_sim in _bt_detail.columns:
+                    _lo_sim = -0.05 if _bt_sim_metric == "Conv Lift" else -500
+                    _hi_sim = 0.15  if _bt_sim_metric == "Conv Lift" else 2000
+                    _bt_sty_sim = _bt_sty_sim.apply(
+                        lambda s: s.map(lambda v: _rdylgn(v, lo=_lo_sim, hi=_hi_sim)),
+                        subset=[_bt_lift_lbl_sim], axis=0)
+                def _bt_role_color_sim(v):
+                    if v == "NOT": return "background-color: #ffdddd; color: #880000"
+                    if v == "AND": return "background-color: #e8d5ff; color: #5500aa"
+                    if v == "OR":  return "background-color: #d0e8ff; color: #003399"
+                    return ""
+                _bt_sty_sim = _bt_sty_sim.apply(lambda s: s.map(_bt_role_color_sim), subset=["Role"], axis=0)
+                _bt_sim_det_h = max(300, min(600, 60 + len(_bt_detail) * 30))
                 components.html(
-                    _styled_html_table(_sim_style, height=_sim_h),
-                    height=_sim_h, scrolling=True,
+                    _styled_html_table(_bt_sty_sim, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS, height=_bt_sim_det_h),
+                    height=_bt_sim_det_h, scrolling=True,
                 )
+                st.markdown("---")
+                st.markdown("#### Audience Profile")
+                if _aud_df is None:
+                    st.info("No audience profile data found. Please provide an audience_profile.csv file.")
+                else:
+                    _bt_aud_keys2 = _bt_df[
+                        (_bt_df["control_flag"] == 0) & (_bt_df["nsegment"].astype(str).isin(_bt_compute_segs))
+                    ]["alpha_key"]
+                    if _bt_compute_excl:
+                        _bt_aud_excl2 = set(_bt_df[
+                            (_bt_df["control_flag"] == 0) & (_bt_df["nsegment"].astype(str).isin(_bt_compute_excl))
+                        ]["alpha_key"])
+                        _bt_aud_keys2 = _bt_aud_keys2[~_bt_aud_keys2.isin(_bt_aud_excl2)]
+                    _bt_aud2 = _aud_df[_aud_df["alpha_key"].isin(_bt_aud_keys2.unique())].copy()
+                    if len(_bt_aud2) == 0:
+                        st.info("No demographic records for the selected segments.")
+                    else:
+                        _bpk1, _bpk2, _bpk3, _bpk4 = st.columns(4)
+                        _bpk1.metric("Audience size", f"{len(_bt_aud2):,}")
+                        _bpk2.metric("Median age",    f"{_bt_aud2['age'].median():.0f} yrs" if "age" in _bt_aud2.columns else "—")
+                        _bpk3.metric("Median tenure", f"{_bt_aud2['tenure_years'].median():.1f} yrs" if "tenure_years" in _bt_aud2.columns else "—")
+                        _bpk4.metric("Median SoW",    f"{_bt_aud2['sow'].median()*100:.0f}%" if "sow" in _bt_aud2.columns else "—")
+                        import plotly.graph_objects as _go_bt2
+                        _bac1, _bac2 = st.columns([3, 2])
+                        with _bac1:
+                            if "age" in _bt_aud2.columns:
+                                _bt_ab = [18,25,35,45,55,65,75,120]
+                                _bt_al = ["18-24","25-34","35-44","45-54","55-64","65-74","75+"]
+                                _bt_aud2["_ag2"] = pd.cut(_bt_aud2["age"], bins=_bt_ab, labels=_bt_al, right=False)
+                                _bt_agd = _bt_aud2["_ag2"].value_counts().reindex(_bt_al).fillna(0).reset_index()
+                                _bt_agd.columns = ["Age group","Customers"]
+                                _fig_ba2 = px.bar(_bt_agd, x="Age group", y="Customers",
+                                                  title="Age Distribution", color="Customers",
+                                                  color_continuous_scale="Blues")
+                                _fig_ba2.update_layout(height=300, coloraxis_showscale=False)
+                                st.plotly_chart(_fig_ba2, width='stretch')
+                        with _bac2:
+                            if "gender" in _bt_aud2.columns:
+                                _bt_gc2 = _bt_aud2["gender"].fillna("Missing").value_counts().reset_index()
+                                _bt_gc2.columns = ["Gender","Count"]
+                                _fig_bg2 = _go_bt2.Figure(_go_bt2.Pie(
+                                    labels=_bt_gc2["Gender"], values=_bt_gc2["Count"], hole=0.4,
+                                    marker=dict(colors=["#89C4E1","#FFB7C5","#CCCCCC"]),
+                                    textinfo="percent+label"))
+                                _fig_bg2.update_layout(title="Gender", height=300)
+                                st.plotly_chart(_fig_bg2, width='stretch')
+                        _bac3, _bac4 = st.columns(2)
+                        with _bac3:
+                            if "tenure_years" in _bt_aud2.columns:
+                                _fig_bten2 = px.histogram(_bt_aud2, x="tenure_years", nbins=20,
+                                                           title="Tenure Distribution",
+                                                           color_discrete_sequence=["#4C9BE8"])
+                                _fig_bten2.update_layout(height=300)
+                                st.plotly_chart(_fig_bten2, width='stretch')
+                        with _bac4:
+                            if "amount_deposit_spot_balance" in _bt_aud2.columns:
+                                _fig_bdep2 = px.histogram(_bt_aud2, x="amount_deposit_spot_balance",
+                                                            nbins=25, title="Deposit Balance",
+                                                            color_discrete_sequence=["#F4A261"])
+                                _fig_bdep2.update_layout(height=300)
+                                st.plotly_chart(_fig_bdep2, width='stretch')
+            elif st.session_state.get("bt_sim_run_triggered") and not _bt_sim_eff:
+                st.warning("No segments to analyse — all included segments are also in the exclude list.")
 
     # ════ DATA QUALITY TAB ════════════════════════════════════════════════════
     with _bt_tab_dq:
