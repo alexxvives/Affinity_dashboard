@@ -786,7 +786,7 @@ def _styled_html_table(
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
                     color: #ccc !important; font-weight: normal; cursor: help;
-                    padding: 4px 10px 4px 8px; min-width: 70px; }}
+                    padding: 4px 6px 4px 6px; min-width: 50px; }}
   th.blank {{ background: #262730 !important; }}
 </style></head><body>
 <div style="overflow:auto; max-height:{height - 20}px;">{html}</div>
@@ -1277,7 +1277,7 @@ def _two_tables_html(items: list, height: int) -> str:
         "tbody tr:hover td { outline: 1px solid #666; }"
         "th.row_heading { background: #1c1e2a !important; font-size: 11px;"
         "                 color: #ccc !important; font-weight: normal; cursor: help;"
-        "                 padding: 4px 10px 4px 8px; min-width: 70px; }"
+        "                 padding: 4px 6px 4px 6px; min-width: 50px; }"
         "th.blank { background: #262730 !important; }"
         ".tbl-lbl { font-size: 11px; font-weight: 600; color: #bbb;"
         "           padding: 6px 2px 2px 2px; margin-top: 2px; }"
@@ -1342,7 +1342,7 @@ def _two_tables_html(items: list, height: int) -> str:
         "tbody tr:hover td { outline: 1px solid #666; }"
         "th.row_heading { background: #1c1e2a !important; font-size: 11px;"
         "                 color: #ccc !important; font-weight: normal; cursor: help;"
-        "                 padding: 4px 10px 4px 8px; min-width: 70px; }"
+        "                 padding: 4px 6px 4px 6px; min-width: 50px; }"
         "th.blank { background: #262730 !important; }"
         ".tbl-lbl { font-size: 11px; font-weight: 600; color: #bbb;"
         "           padding: 6px 2px 2px 2px; margin-top: 2px; }"
@@ -1994,7 +1994,7 @@ if active_campaign == "SELECTCHK":
                         "tbody tr:hover td { outline: 1px solid #666; }"
                         "th.row_heading { background: #1c1e2a !important; font-size: 11px;"
                         "                 color: #ccc !important; font-weight: normal; cursor: help;"
-                        "                 padding: 4px 10px 4px 8px; min-width: 70px; }"
+                        "                 padding: 4px 6px 4px 6px; min-width: 50px; }"
                         "th.blank { background: #262730 !important; }"
                         ".tbl-lbl { font-size: 11px; font-weight: 600; color: #bbb;"
                         "           padding: 6px 2px 2px 2px; margin-top: 2px; }"
@@ -3182,25 +3182,6 @@ elif active_campaign == "CC_BT":
         if _bt_tbl.empty:
             st.warning("No segments meet the minimum N threshold. Lower the filter in the sidebar.")
         else:
-            # ── KPI headline row ──────────────────────────────────────────────
-            _ov_treated = _bt_df[_bt_df["control_flag"] == 0]
-            _ov_control = _bt_df[_bt_df["control_flag"] == 1]
-            _overall_conv_t = _ov_treated["bt_flag"].mean()
-            _overall_conv_c = _ov_control["bt_flag"].mean()
-            _converters = _ov_treated[_ov_treated["bt_flag"] == 1]
-            _overall_amt_t  = _converters["bt_amount"].mean() if not _converters.empty else 0.0
-
-            _k1, _k2, _k3, _k4 = st.columns(4)
-            _n_treated = _bt_df[_bt_df["control_flag"] == 0]["alpha_key"].nunique()
-            _n_control = _bt_df[_bt_df["control_flag"] == 1]["alpha_key"].nunique()
-            _k1.metric("Treated users",               f"{_n_treated:,}")
-            _k2.metric("Control users",               f"{_n_control:,}")
-            _k3.metric("BT rate (treated)",           f"{_overall_conv_t:.1%}",
-                       delta=f"{_overall_conv_t - _overall_conv_c:+.1%} vs control")
-            _k4.metric("Avg BT amount (converters)",  f"${_overall_amt_t:,.0f}")
-
-            st.divider()
-
             # ── Metric / display options ──────────────────────────────────────
             _bt_mc1, _bt_mc2, _ = st.columns([2, 2, 3])
             _bt_metric = _bt_mc1.radio(
@@ -3231,10 +3212,7 @@ elif active_campaign == "CC_BT":
             if _bt_show_n:
                 _disp_cols = ["n_treated", "n_control"] + _disp_cols
             _bt_disp = _bt_tbl[[c for c in _disp_cols if c in _bt_tbl.columns]].copy()
-            _bt_disp.index = [
-                f"{x}  —  {SEGMENT_LABELS.get(str(x), '')}" if SEGMENT_LABELS.get(str(x)) else str(x)
-                for x in _bt_disp.index
-            ]
+            _bt_disp.index = [str(x) for x in _bt_disp.index]
             _col_rename = {
                 "n_treated": "N (treated)", "n_control": "N (control)",
                 _t_col: _t_label, _c_col: _c_label,
