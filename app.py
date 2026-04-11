@@ -289,7 +289,7 @@ def _seg_lookup_widget(seg_ids: List[str], labels: Dict[str, str], descriptions:
         "Segment lookup",
         options=seg_ids,
         index=None,
-        placeholder="Type segment ID or name…",
+        placeholder="Type segment ID",
         key="seg_lookup_sel",
         format_func=lambda x: f"{x}  —  {labels.get(x, '')}",
     )
@@ -783,6 +783,7 @@ def _styled_html_table(
     seg_desc: Optional[Dict[str, str]] = None,
     height: int = 400,
     warn_ci_pairs: Optional[List] = None,
+    index_max_width: Optional[int] = None,
 ) -> str:
     """Convert a Pandas Styler to a themed HTML doc with segment-ID hover tooltips."""
     import re as _re2
@@ -818,7 +819,8 @@ def _styled_html_table(
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
                     color: #ccc !important; font-weight: normal; cursor: help;
-                    padding: 4px 6px 4px 6px; min-width: 50px; }}
+                    padding: 4px 6px 4px 6px; min-width: 50px;
+                    {('max-width: ' + str(index_max_width) + 'px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;') if index_max_width else ''} }}
   th.blank {{ background: #262730 !important; }}
 </style></head><body>
 <div style="overflow:auto; max-height:{height - 20}px;">{html}</div>
@@ -1447,8 +1449,8 @@ def _render_momentum_matrix(
         st.info("No audience profile data available. Please provide audience_profile.csv.")
         return
 
-    # ── Axis selectors (segmented control) ─────────────────────────────────
-    _ax_c1, _ax_c2, _ = st.columns([2, 2, 3])
+    # ── Axis selectors (centered segmented controls) ──────────────────────
+    _, _ax_c1, _ax_c2, _ = st.columns([1, 2, 2, 1])
     with _ax_c1:
         st.caption("**X-axis**")
         _x_axis = st.segmented_control(
@@ -1457,7 +1459,6 @@ def _render_momentum_matrix(
         ) or _METRIC_LABELS[0]
     with _ax_c2:
         _y_opts = [m for m in _METRIC_LABELS if m != _x_axis]
-        # Reset Y key when X changes so default applies cleanly
         _y_key  = f"{tab_key}_yaxis_{_x_axis}"
         st.caption("**Y-axis**")
         _y_axis = st.segmented_control(
@@ -1576,7 +1577,8 @@ def _render_momentum_matrix(
         colorbar=dict(title="Customers", thickness=14, len=0.8),
         hovertemplate=(
             f"<b>{_x_axis}:</b> %{{x}}<br><b>{_y_axis}:</b> %{{y}}<br>"
-            f"<b>Customers:</b> %{{z:,}}<extra></extra>"
+            f"<b>Customers:</b> %{{z:,}}<br>"
+            f"<i style='color:#aaa'>Click to explore →</i><extra></extra>"
         ),
     ))
 
@@ -1608,6 +1610,12 @@ def _render_momentum_matrix(
         dragmode=False,
     )
 
+    # ── Hover pointer CSS ────────────────────────────────────────────────────
+    st.markdown(
+        "<style>[data-testid='stPlotlyChart'] { cursor: pointer; }</style>",
+        unsafe_allow_html=True,
+    )
+
     # ── Click hint + chart ───────────────────────────────────────────────────
     st.caption("Click any cell to drill into that customer segment →")
     _sel = st.plotly_chart(
@@ -1615,15 +1623,12 @@ def _render_momentum_matrix(
         use_container_width=True,
     )
 
-    # ── Update bucket from latest click ─────────────────────────────────────
+    # ── Update bucket from click (same run — no extra rerun needed) ──────────
+    _cur_x, _cur_y = st.session_state.get(_bucket_key, (None, None))
     if _sel and _sel.get("selection", {}).get("points"):
         _pt = _sel["selection"]["points"][0]
-        _new_bucket = (_pt.get("x"), _pt.get("y"))
-        if _new_bucket != st.session_state.get(_bucket_key):
-            st.session_state[_bucket_key] = _new_bucket
-            st.rerun()
-
-    _cur_x, _cur_y = st.session_state.get(_bucket_key, (None, None))
+        _cur_x, _cur_y = _pt.get("x"), _pt.get("y")
+        st.session_state[_bucket_key] = (_cur_x, _cur_y)
 
     # ── Details panel ───────────────────────────────────────────────────────
     if _cur_x in _BUCKET_LABELS and _cur_y in _BUCKET_LABELS:
@@ -3622,7 +3627,7 @@ elif active_campaign == "CC_BT":
 
             _bt_h = max(300, min(800, 60 + len(_bt_disp) * 26))
             components.html(
-                _styled_html_table(_styled_bt, height=_bt_h),
+                _styled_html_table(_styled_bt, height=_bt_h, index_max_width=40),
                 height=_bt_h, scrolling=True,
             )
 
