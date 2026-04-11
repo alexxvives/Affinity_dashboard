@@ -1447,17 +1447,23 @@ def _render_momentum_matrix(
         st.info("No audience profile data available. Please provide audience_profile.csv.")
         return
 
-    # ── Axis selectors ──────────────────────────────────────────────────────
-    _ax1, _ax2, _ax3 = st.columns([1, 1, 3])
-    with _ax1:
-        _x_axis = st.radio("X-axis", _METRIC_LABELS, key=f"{tab_key}_xaxis")
-    with _ax2:
-        _y_default = 1 if _METRIC_LABELS.index(_x_axis) != 1 else 2
-        _y_axis = st.radio("Y-axis", _METRIC_LABELS, key=f"{tab_key}_yaxis", index=_y_default)
-
-    if _x_axis == _y_axis:
-        st.warning("Please choose different metrics for X and Y axes.")
-        return
+    # ── Axis selectors (segmented control) ─────────────────────────────────
+    _ax_c1, _ax_c2, _ = st.columns([2, 2, 3])
+    with _ax_c1:
+        st.caption("**X-axis**")
+        _x_axis = st.segmented_control(
+            "X-axis", _METRIC_LABELS, default=_METRIC_LABELS[0],
+            key=f"{tab_key}_xaxis", label_visibility="collapsed",
+        ) or _METRIC_LABELS[0]
+    with _ax_c2:
+        _y_opts = [m for m in _METRIC_LABELS if m != _x_axis]
+        # Reset Y key when X changes so default applies cleanly
+        _y_key  = f"{tab_key}_yaxis_{_x_axis}"
+        st.caption("**Y-axis**")
+        _y_axis = st.segmented_control(
+            "Y-axis", _y_opts, default=_y_opts[0],
+            key=_y_key, label_visibility="collapsed",
+        ) or _y_opts[0]
 
     _x_col = _METRIC_OPTS[_x_axis]
     _y_col = _METRIC_OPTS[_y_axis]
@@ -1530,81 +1536,114 @@ def _render_momentum_matrix(
         .reindex(index=_BUCKET_LABELS, columns=_BUCKET_LABELS)
     )
 
-    # ── Color-by selector ───────────────────────────────────────────────────
-    _color_opts = ["Customer count", _outcome_label]
-    _color_by = st.radio("Color by", _color_opts, key=f"{tab_key}_colorby", horizontal=True)
+    # ── Always color by customer count (Blues) ─────────────────────────────
+    _z = _pivot_count.values.tolist()
 
-    if _color_by == "Customer count":
-        _z          = _pivot_count.values.tolist()
-        _colorscale = "Blues"
-        _fmt_fn     = lambda v: f"{int(v):,}" if not np.isnan(float(v)) else "—"
+    # Metric format for secondary annotation text
+    if campaign_type == "cc_bt":
+        _mv_fmt = lambda v: f"{float(v):.1%}" if not pd.isna(v) else "—"
     else:
-        _z          = _pivot_metric.values.tolist()
-        _colorscale = "RdYlGn"
-        if campaign_type == "cc_bt":
-            _fmt_fn = lambda v: f"{float(v):.1%}" if not np.isnan(float(v)) else "—"
-        else:
-            _fmt_fn = lambda v: f"{float(v):+.1%}" if not np.isnan(float(v)) else "—"
+        _mv_fmt = lambda v: f"{float(v):+.1%}" if not pd.isna(v) else "—"
 
-    # ── Annotations: count + metric ─────────────────────────────────────────
+    # ── Session-state bucket persistence ────────────────────────────────────
+    _bucket_key = f"{tab_key}_bucket"
+    _axes_key   = f"{tab_key}_last_axes"
+    # Clear stored bucket if axes changed
+    if st.session_state.get(_axes_key) != (_x_axis, _y_axis):
+        st.session_state[_axes_key] = (_x_axis, _y_axis)
+        st.session_state[_bucket_key] = (None, None)
+
+    # ── Annotations: customer count + outcome metric ─────────────────────────
     _text = []
     for _yl in _BUCKET_LABELS:
         _row = []
         for _xl in _BUCKET_LABELS:
-            _n   = int(_pivot_count.loc[_yl, _xl]) if (_yl in _pivot_count.index and _xl in _pivot_count.columns) else 0
-            _mv  = _pivot_metric.loc[_yl, _xl] if (_yl in _pivot_metric.index and _xl in _pivot_metric.columns) else float("nan")
-            _mv_str = _fmt_fn(_mv) if not pd.isna(_mv) else "—"
-            _row.append(f"n={_n:,}<br>{_mv_str}")
+            _n  = int(_pivot_count.loc[_yl, _xl]) if (_yl in _pivot_count.index and _xl in _pivot_count.columns) else 0
+            _mv = _pivot_metric.loc[_yl, _xl] if (_yl in _pivot_metric.index and _xl in _pivot_metric.columns) else float("nan")
+            _row.append(f"<b>{_n:,}</b><br><span style='font-size:10px'>{_mv_fmt(_mv)}</span>")
         _text.append(_row)
 
-    # ── Render heatmap ───────────────────────────────────────────────────────
+    # ── Build heatmap figure ─────────────────────────────────────────────────
     _fig_mm = go.Figure(go.Heatmap(
         z=_z,
         x=_BUCKET_LABELS,
         y=_BUCKET_LABELS,
         text=_text,
         texttemplate="%{text}",
-        textfont={"size": 12},
-        colorscale=_colorscale,
+        textfont={"size": 13},
+        colorscale="Blues",
         showscale=True,
+        colorbar=dict(title="Customers", thickness=14, len=0.8),
         hovertemplate=(
-            f"{_x_axis}: %{{x}}<br>{_y_axis}: %{{y}}<br>"
-            f"Customers: %{{customdata}}<extra></extra>"
+            f"<b>{_x_axis}:</b> %{{x}}<br><b>{_y_axis}:</b> %{{y}}<br>"
+            f"<b>Customers:</b> %{{z:,}}<extra></extra>"
         ),
-        customdata=_pivot_count.values.tolist(),
     ))
+
+    # Highlight the currently selected bucket with a white border
+    _cur_x, _cur_y = st.session_state.get(_bucket_key, (None, None))
+    if _cur_x in _BUCKET_LABELS and _cur_y in _BUCKET_LABELS:
+        _xi = _BUCKET_LABELS.index(_cur_x)
+        _yi = _BUCKET_LABELS.index(_cur_y)
+        _fig_mm.add_shape(
+            type="rect",
+            x0=_xi - 0.5, x1=_xi + 0.5,
+            y0=_yi - 0.5, y1=_yi + 0.5,
+            line=dict(color="white", width=4),
+            fillcolor="rgba(0,0,0,0)",
+            layer="above",
+        )
+
     _fig_mm.update_layout(
         title=dict(
-            text=f"Momentum Matrix — <b>{_x_axis}</b> (X) × <b>{_y_axis}</b> (Y)",
+            text=f"Momentum Matrix — <b>{_x_axis}</b> × <b>{_y_axis}</b>",
             font=dict(size=15),
         ),
-        xaxis_title=_x_axis,
-        yaxis_title=_y_axis,
+        xaxis=dict(title=dict(text=_x_axis, font=dict(size=13)), fixedrange=True),
+        yaxis=dict(title=dict(text=_y_axis, font=dict(size=13)), fixedrange=True),
         height=440,
-        margin=dict(l=70, r=40, t=70, b=60),
+        margin=dict(l=70, r=60, t=65, b=60),
         font=dict(size=13),
+        hoverlabel=dict(bgcolor="#1e2030", font_size=13, font_family="sans-serif"),
+        dragmode=False,
     )
 
-    _sel = st.plotly_chart(_fig_mm, on_select="rerun", key=f"{tab_key}_heatmap",
-                           use_container_width=True)
+    # ── Click hint + chart ───────────────────────────────────────────────────
+    st.caption("Click any cell to drill into that customer segment →")
+    _sel = st.plotly_chart(
+        _fig_mm, on_select="rerun", key=f"{tab_key}_heatmap",
+        use_container_width=True,
+    )
 
-    # ── Details panel (after cell click) ───────────────────────────────────
-    _x_bucket = _y_bucket = None
+    # ── Update bucket from latest click ─────────────────────────────────────
     if _sel and _sel.get("selection", {}).get("points"):
-        _pt        = _sel["selection"]["points"][0]
-        _x_bucket  = _pt.get("x")
-        _y_bucket  = _pt.get("y")
+        _pt = _sel["selection"]["points"][0]
+        _new_bucket = (_pt.get("x"), _pt.get("y"))
+        if _new_bucket != st.session_state.get(_bucket_key):
+            st.session_state[_bucket_key] = _new_bucket
+            st.rerun()
 
-    if _x_bucket and _y_bucket:
+    _cur_x, _cur_y = st.session_state.get(_bucket_key, (None, None))
+
+    # ── Details panel ───────────────────────────────────────────────────────
+    if _cur_x in _BUCKET_LABELS and _cur_y in _BUCKET_LABELS:
         _subset = _merged[
-            (_merged["_xb"].astype(str) == str(_x_bucket))
-            & (_merged["_yb"].astype(str) == str(_y_bucket))
+            (_merged["_xb"].astype(str) == str(_cur_x))
+            & (_merged["_yb"].astype(str) == str(_cur_y))
         ]
         _n_total   = len(_subset)
         _n_treated = int((_subset[_treat_col] == 1).sum())
 
         st.divider()
-        st.subheader(f"Bucket: {_y_axis} = **{_y_bucket}**  ·  {_x_axis} = **{_x_bucket}**")
+        _h_col, _clr_col = st.columns([5, 1])
+        with _h_col:
+            st.subheader(
+                f"{_y_axis}: **{_cur_y}**  ·  {_x_axis}: **{_cur_x}**"
+            )
+        with _clr_col:
+            if st.button("✕ Clear", key=f"{tab_key}_clear", use_container_width=True):
+                st.session_state[_bucket_key] = (None, None)
+                st.rerun()
 
         _k1, _k2, _k3, _k4 = st.columns(4)
         _k1.metric("Customers", f"{_n_total:,}")
@@ -1695,7 +1734,6 @@ def _render_momentum_matrix(
                 st.plotly_chart(_fig_np_s, use_container_width=True)
 
             with _dm6:
-                # Top segments in this bucket
                 _subset_keys = set(_subset["alpha_key"])
                 _seg_sub     = campaign_raw_df[campaign_raw_df["alpha_key"].isin(_subset_keys)]
                 _seg_series  = _seg_sub["nsegments"].apply(_try_parse_listlike).explode().dropna()
@@ -1713,8 +1751,6 @@ def _render_momentum_matrix(
                                            coloraxis_showscale=False,
                                            yaxis=dict(categoryorder="total ascending"))
                 st.plotly_chart(_fig_segs_s, use_container_width=True)
-    else:
-        st.info("Click a cell in the matrix to drill down into the customer details for that bucket.")
 
 
 # ══════════════════════════════════════════════════════════
@@ -1957,7 +1993,12 @@ if active_campaign == "SELECTCHK":
                 show_lift=show_lift,
                 show_metric=_show_metric_val,
             )
-            _tbl_h = max(300, min(680, 55 + len(tbl) * 32))
+            if show_lift:
+                st.caption(
+                    "**Blank cells** = fewer than 30 customers in that segment × communication (too small to trust)."
+                )
+
+            _tbl_h = max(300, min(680, 60 + len(tbl) * 27))
             components.html(html_tbl, height=_tbl_h, scrolling=True)
 
             # ── Downloads ────────────────────────────────────────────────────
@@ -1970,11 +2011,6 @@ if active_campaign == "SELECTCHK":
                 use_container_width=True,
                 key="selectchk_dl_xlsx",
             )
-
-            if show_lift:
-                st.caption(
-                    "**Blank cells** = fewer than 30 customers in that segment × communication (too small to trust)."
-                )
 
             if show_lift:
                 with st.expander("How to read Lift \u00b1 CI", expanded=False):
