@@ -1470,11 +1470,11 @@ def _render_momentum_matrix(
 
     # ── Build user-level campaign view ──────────────────────────────────────
     if campaign_type == "selectchk":
-        _ucols = ["alpha_key", "Contact_flag", "start_balance", "end_balance", "nsegments"]
+        _ucols = ["alpha_key", "contact_flag", "start_balance", "end_balance", "nsegments"]
         _ucols = [c for c in _ucols if c in campaign_raw_df.columns]
         _ugrp = campaign_raw_df[_ucols].groupby("alpha_key", sort=False)
         _user_df = _ugrp.agg(
-            treated=("Contact_flag", "max"),
+            treated=("contact_flag", "max"),
             mean_start=("start_balance", "mean"),
             mean_end=("end_balance", "mean"),
         ).reset_index()
