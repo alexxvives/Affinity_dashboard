@@ -1645,7 +1645,7 @@ def _render_momentum_matrix(
         ),
         xaxis=dict(title=dict(text=_x_axis, font=dict(size=13)), fixedrange=True),
         yaxis=dict(title=dict(text=_y_axis, font=dict(size=13)), fixedrange=True),
-        height=440,
+        height=1320,
         margin=dict(l=70, r=60, t=65, b=60),
         font=dict(size=13),
         hoverlabel=dict(bgcolor="#1e2030", font_size=13, font_family="sans-serif"),
@@ -1918,15 +1918,23 @@ def _render_momentum_matrix(
                         from scipy.ndimage import gaussian_filter as _gf_s
                         _xs_s = _sow_df_s["amount_deposit_spot_balance"].values
                         _ys_s = _sow_df_s["total_deposits_ixi"].values
+                        _sow_vals_s = _sow_df_s["sow"].values
+                        _kde_n_s = len(_xs_s)
+                        if _kde_n_s > 2000:
+                            _rng_s = np.random.default_rng(0)
+                            _idx_s = _rng_s.choice(_kde_n_s, 2000, replace=False)
+                            _xs_kde_s, _ys_kde_s = _xs_s[_idx_s], _ys_s[_idx_s]
+                        else:
+                            _xs_kde_s, _ys_kde_s = _xs_s, _ys_s
                         try:
-                            _kde_sow_s = _gkde_sow_s(np.vstack([_xs_s, _ys_s]), bw_method=0.3)
+                            _kde_sow_s = _gkde_sow_s(np.vstack([_xs_kde_s, _ys_kde_s]), bw_method=0.3)
                             _xi_s = np.linspace(_xs_s.min(), _xs_s.max(), 200)
                             _yi_s = np.linspace(_ys_s.min(), _ys_s.max(), 200)
                             _XX_s, _YY_s = np.meshgrid(_xi_s, _yi_s)
                             _ZZ_s = _kde_sow_s(np.vstack([_XX_s.ravel(), _YY_s.ravel()])).reshape(_XX_s.shape)
                             _ZZ_s = _gf_s(_ZZ_s, sigma=3)
-                            _z_pts_s = _kde_sow_s(np.vstack([_xs_s, _ys_s]))
-                            _sow_vals_s = _sow_df_s["sow"].values
+                            _z_pts_s = _kde_sow_s(np.vstack([_xs_kde_s, _ys_kde_s]))
+                            _sow_vals_s = _sow_vals_s[_idx_s] if _kde_n_s > 2000 else _sow_vals_s
                             for _plbl_s, _clr_s in [
                                 (90, "#2166ac"),
                                 (50, "#1a9850"),
@@ -2853,15 +2861,23 @@ if active_campaign == "SELECTCHK":
                     from scipy.ndimage import gaussian_filter as _gf2
                     _x2 = _sow_df2["amount_deposit_spot_balance"].values
                     _y2 = _sow_df2["total_deposits_ixi"].values
+                    _sow_vals2 = _sow_df2["sow"].values
+                    _kde_n2 = len(_x2)
+                    if _kde_n2 > 2000:
+                        _rng2 = np.random.default_rng(0)
+                        _idx2 = _rng2.choice(_kde_n2, 2000, replace=False)
+                        _x2k, _y2k = _x2[_idx2], _y2[_idx2]
+                    else:
+                        _x2k, _y2k = _x2, _y2
                     try:
-                        _kde2 = _gkde_sow2(np.vstack([_x2, _y2]), bw_method=0.3)
+                        _kde2 = _gkde_sow2(np.vstack([_x2k, _y2k]), bw_method=0.3)
                         _xi2 = np.linspace(_x2.min(), _x2.max(), 200)
                         _yi2 = np.linspace(_y2.min(), _y2.max(), 200)
                         _XX2, _YY2 = np.meshgrid(_xi2, _yi2)
                         _ZZ2 = _kde2(np.vstack([_XX2.ravel(), _YY2.ravel()])).reshape(_XX2.shape)
                         _ZZ2 = _gf2(_ZZ2, sigma=3)
-                        _z_pts2 = _kde2(np.vstack([_x2, _y2]))
-                        _sow_vals2 = _sow_df2["sow"].values
+                        _z_pts2 = _kde2(np.vstack([_x2k, _y2k]))
+                        _sow_vals2 = _sow_vals2[_idx2] if _kde_n2 > 2000 else _sow_vals2
                         for _plbl2, _clr2 in [
                             (90, "#2166ac"),   # blue  — outermost (90% of pts inside)
                             (50, "#1a9850"),   # green — 50% inside
@@ -3491,14 +3507,23 @@ if active_campaign == "SELECTCHK":
                                 from scipy.ndimage import gaussian_filter as _gfs
                                 _xs = _sow_sc_df["amount_deposit_spot_balance"].values
                                 _ys = _sow_sc_df["total_deposits_ixi"].values
+                                _sow_vals_sc = _sow_sc_df["sow"].values
+                                _kde_ns = len(_xs)
+                                if _kde_ns > 2000:
+                                    _rngs = np.random.default_rng(0)
+                                    _idxs = _rngs.choice(_kde_ns, 2000, replace=False)
+                                    _xs_k, _ys_k = _xs[_idxs], _ys[_idxs]
+                                else:
+                                    _xs_k, _ys_k = _xs, _ys
                                 try:
-                                    _kdes = _gkde_sow(np.vstack([_xs, _ys]), bw_method=0.3)
+                                    _kdes = _gkde_sow(np.vstack([_xs_k, _ys_k]), bw_method=0.3)
                                     _xis = np.linspace(_xs.min(), _xs.max(), 200)
                                     _yis = np.linspace(_ys.min(), _ys.max(), 200)
                                     _XXs, _YYs = np.meshgrid(_xis, _yis)
                                     _ZZs = _kdes(np.vstack([_XXs.ravel(), _YYs.ravel()])).reshape(_XXs.shape)
                                     _ZZs = _gfs(_ZZs, sigma=3)
-                                    _z_pts_s = _kdes(np.vstack([_xs, _ys]))
+                                    _z_pts_s = _kdes(np.vstack([_xs_k, _ys_k]))
+                                    _sow_vals_sc = _sow_vals_sc[_idxs] if _kde_ns > 2000 else _sow_vals_sc
                                     for _plbls, _clrs in [
                                         (90, "#2166ac"),   # blue  — outermost (90% of pts inside)
                                         (50, "#1a9850"),   # green — 50% inside
@@ -4172,15 +4197,23 @@ elif active_campaign == "CC_BT":
                     from scipy.ndimage import gaussian_filter as _gf_bt
                     _xs_bt = _sow_df_bt['amount_deposit_spot_balance'].values
                     _ys_bt = _sow_df_bt['total_deposits_ixi'].values
+                    _sow_vals_bt = _sow_df_bt['sow'].values
+                    _kde_n_bt = len(_xs_bt)
+                    if _kde_n_bt > 2000:
+                        _rng_bt = np.random.default_rng(0)
+                        _idx_bt = _rng_bt.choice(_kde_n_bt, 2000, replace=False)
+                        _xs_kde_bt, _ys_kde_bt = _xs_bt[_idx_bt], _ys_bt[_idx_bt]
+                    else:
+                        _xs_kde_bt, _ys_kde_bt = _xs_bt, _ys_bt
                     try:
-                        _kde_bt = _gkde_sow_bt(np.vstack([_xs_bt, _ys_bt]), bw_method=0.3)
+                        _kde_bt = _gkde_sow_bt(np.vstack([_xs_kde_bt, _ys_kde_bt]), bw_method=0.3)
                         _xi_bt = np.linspace(_xs_bt.min(), _xs_bt.max(), 200)
                         _yi_bt = np.linspace(_ys_bt.min(), _ys_bt.max(), 200)
                         _XX_bt, _YY_bt = np.meshgrid(_xi_bt, _yi_bt)
                         _ZZ_bt = _kde_bt(np.vstack([_XX_bt.ravel(), _YY_bt.ravel()])).reshape(_XX_bt.shape)
                         _ZZ_bt = _gf_bt(_ZZ_bt, sigma=3)
-                        _z_pts_bt = _kde_bt(np.vstack([_xs_bt, _ys_bt]))
-                        _sow_vals_bt = _sow_df_bt['sow'].values
+                        _z_pts_bt = _kde_bt(np.vstack([_xs_kde_bt, _ys_kde_bt]))
+                        _sow_vals_bt = _sow_vals_bt[_idx_bt] if _kde_n_bt > 2000 else _sow_vals_bt
                         for _plbl_bt, _clr_bt in [
                             (90, '#2166ac'), (50, '#1a9850'), (25, '#f4a11d'), (10, '#c0392b'),
                         ]:
