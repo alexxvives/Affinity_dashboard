@@ -1645,7 +1645,7 @@ def _render_momentum_matrix(
         ),
         xaxis=dict(title=dict(text=_x_axis, font=dict(size=13)), fixedrange=True),
         yaxis=dict(title=dict(text=_y_axis, font=dict(size=13)), fixedrange=True),
-        height=1320,
+        height=660,
         margin=dict(l=70, r=60, t=65, b=60),
         font=dict(size=13),
         hoverlabel=dict(bgcolor="#1e2030", font_size=13, font_family="sans-serif"),
@@ -1671,9 +1671,6 @@ def _render_momentum_matrix(
         _pt = _sel["selection"]["points"][0]
         _cur_x, _cur_y = _pt.get("x"), _pt.get("y")
         st.session_state[_bucket_key] = (_cur_x, _cur_y)
-
-    # debug: always show what's selected so we can diagnose "no graphs" issue
-    st.caption(f"🔎 Selected cell: x={_cur_x!r} y={_cur_y!r} | valid: {_cur_x in _BUCKET_LABELS and _cur_y in _BUCKET_LABELS}")
 
     # ── Details panel ───────────────────────────────────────────────────────
     if _cur_x in _BUCKET_LABELS and _cur_y in _BUCKET_LABELS:
