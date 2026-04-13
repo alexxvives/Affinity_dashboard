@@ -1744,8 +1744,12 @@ def _render_momentum_matrix(
         # ── Demographics ────────────────────────────────────────────────────
         if len(_subset) > 0:
             st.markdown("#### Demographics")
+            with st.expander("🔍 Debug: available columns in this cell", expanded=False):
+                st.write(list(_subset.columns))
+                st.write(f"Rows: {len(_subset)}")
 
-            def _kde_mm(series, nbins, line_color):
+            try:
+              def _kde_mm(series, nbins, line_color):
                 from scipy.stats import gaussian_kde as _gkde_mm
                 _v = series.dropna().values
                 if len(_v) < 5:
@@ -1992,10 +1996,10 @@ def _render_momentum_matrix(
                                              legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)',
                                                          bordercolor='#aaa', borderwidth=1))
                     st.plotly_chart(_fig_sow_s, use_container_width=True)
-
-
-# ══════════════════════════════════════════════════════════
-# SELECTCHK CAMPAIGN
+            except Exception as _demo_err:
+                import traceback
+                st.error(f"Demographics rendering error: {_demo_err}")
+                st.code(traceback.format_exc())
 # ══════════════════════════════════════════════════════════
 if active_campaign == "SELECTCHK":
 
