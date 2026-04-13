@@ -106,18 +106,18 @@ def _load_audience_profile(b: bytes) -> pd.DataFrame:
         aud["sow"] = (aud["amount_deposit_spot_balance"] / aud["total_deposits_ixi"]).clip(0, 1)
     if "n_products" not in aud.columns:
         present_prod_cols = [c for c in PRODUCT_COLS if c in aud.columns]
-        aud["n_products"] = aud[present_prod_cols].sum(axis=1).astype(int)
+        aud["n_products"] = aud[present_prod_cols].fillna(0).sum(axis=1).astype(int)
     # ── Momentum Matrix fields ─────────────────────────────────────────────
     if "annual_revenue" not in aud.columns:
         _rng_mm = np.random.default_rng(42)
         aud["annual_revenue"] = (
-            aud["amount_deposit_spot_balance"].clip(lower=500) * 0.15
+            aud["amount_deposit_spot_balance"].fillna(0).clip(lower=500) * 0.15
             * _rng_mm.lognormal(0, 0.4, len(aud))
         ).clip(2_000, 500_000).round(0).astype(int)
     if "clv_2yr" not in aud.columns:
         _rng_mm2 = np.random.default_rng(43)
         aud["clv_2yr"] = (
-            aud["annual_revenue"] * 0.06
+            aud["annual_revenue"].fillna(0) * 0.06
             * _rng_mm2.lognormal(0, 0.35, len(aud))
         ).clip(100, 30_000).round(0).astype(int)
     if "churn_score" not in aud.columns:
