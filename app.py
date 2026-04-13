@@ -1531,8 +1531,20 @@ def _render_momentum_matrix(
         return
 
     # ── Bin axes into tertiles ──────────────────────────────────────────────
-    _merged["_xb"] = pd.qcut(_merged[_x_col], q=3, labels=_BUCKET_LABELS, duplicates="drop")
-    _merged["_yb"] = pd.qcut(_merged[_y_col], q=3, labels=_BUCKET_LABELS, duplicates="drop")
+    def _safe_qcut(series, q, labels):
+        """qcut with fallback: if too few distinct values to form q bins, use rank-based cut."""
+        try:
+            return pd.qcut(series, q=q, labels=labels, duplicates="drop")
+        except ValueError:
+            # Fewer unique values than bins — rank-cut instead
+            try:
+                return pd.qcut(series.rank(method="first"), q=q, labels=labels, duplicates="drop")
+            except ValueError:
+                # Last resort: assign everything to the middle bucket
+                return pd.Categorical([labels[len(labels) // 2]] * len(series), categories=labels, ordered=True)
+
+    _merged["_xb"] = _safe_qcut(_merged[_x_col], q=3, labels=_BUCKET_LABELS)
+    _merged["_yb"] = _safe_qcut(_merged[_y_col], q=3, labels=_BUCKET_LABELS)
 
     # ── Build pivot tables ──────────────────────────────────────────────────
     _pivot_count = (
