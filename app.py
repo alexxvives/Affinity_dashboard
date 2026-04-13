@@ -1672,6 +1672,9 @@ def _render_momentum_matrix(
         _cur_x, _cur_y = _pt.get("x"), _pt.get("y")
         st.session_state[_bucket_key] = (_cur_x, _cur_y)
 
+    # debug: always show what's selected so we can diagnose "no graphs" issue
+    st.caption(f"🔎 Selected cell: x={_cur_x!r} y={_cur_y!r} | valid: {_cur_x in _BUCKET_LABELS and _cur_y in _BUCKET_LABELS}")
+
     # ── Details panel ───────────────────────────────────────────────────────
     if _cur_x in _BUCKET_LABELS and _cur_y in _BUCKET_LABELS:
         _subset = _merged[
@@ -1747,259 +1750,259 @@ def _render_momentum_matrix(
             with st.expander("🔍 Debug: available columns in this cell", expanded=False):
                 st.write(list(_subset.columns))
                 st.write(f"Rows: {len(_subset)}")
-
             try:
-              def _kde_mm(series, nbins, line_color):
-                from scipy.stats import gaussian_kde as _gkde_mm
-                _v = series.dropna().values
-                if len(_v) < 5:
-                    return None
-                _, _edges = np.histogram(_v, bins=nbins)
-                _bw = _edges[1] - _edges[0]
-                _fn = _gkde_mm(_v)
-                _xs = np.linspace(_v.min(), _v.max(), 300)
-                _ys = _fn(_xs) * len(_v) * _bw
-                return go.Scatter(x=_xs, y=_ys, mode="lines",
-                                  line=dict(color=line_color, width=2.5),
-                                  showlegend=False, name="")
+                def _kde_mm(series, nbins, line_color):
+                    from scipy.stats import gaussian_kde as _gkde_mm
+                    _v = series.dropna().values
+                    if len(_v) < 5:
+                        return None
+                    _, _edges = np.histogram(_v, bins=nbins)
+                    _bw = _edges[1] - _edges[0]
+                    _fn = _gkde_mm(_v)
+                    _xs = np.linspace(_v.min(), _v.max(), 300)
+                    _ys = _fn(_xs) * len(_v) * _bw
+                    return go.Scatter(x=_xs, y=_ys, mode="lines",
+                                      line=dict(color=line_color, width=2.5),
+                                      showlegend=False, name="")
 
-            # Row 1: Age (wide) + Gender (narrow)
-            _dm1, _dm2 = st.columns([3, 2])
-            with _dm1:
-                _age_bins_s  = [18, 25, 35, 45, 55, 65, 75, 120]
-                _age_lbls_s  = ["18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"]
-                _sub_age     = pd.cut(_subset["age"], bins=_age_bins_s, labels=_age_lbls_s, right=False)
-                _age_d       = _sub_age.value_counts().reindex(_age_lbls_s).fillna(0).reset_index()
-                _age_d.columns = ["Age group", "Customers"]
-                _fig_age_s = px.bar(_age_d, x="Age group", y="Customers",
-                                    title="Age Distribution",
-                                    color="Customers", color_continuous_scale="Blues")
-                _fig_age_s.add_scatter(x=_age_d["Age group"], y=_age_d["Customers"],
-                                       mode="lines+markers",
-                                       line=dict(color="#103060", width=2, shape="spline", smoothing=1.0),
-                                       marker=dict(size=5, color="#103060"), showlegend=False, name="")
-                _age_mean_s = float(_subset["age"].dropna().mean()) if _subset["age"].notna().any() else 0.0
-                _age_mean_bin_s = str(pd.cut([_age_mean_s], bins=_age_bins_s, labels=_age_lbls_s, right=False)[0])
-                _fig_age_s.add_shape(
-                    type="line", xref="x", yref="paper",
-                    x0=_age_mean_bin_s, x1=_age_mean_bin_s, y0=0, y1=1,
-                    line=dict(color="red", width=2, dash="dash"),
-                )
-                _fig_age_s.add_annotation(
-                    x=_age_mean_bin_s, yref="paper", y=1.05,
-                    text=f"Mean: {_age_mean_s:.1f}y", showarrow=False,
-                    xanchor="left", font=dict(color="red", size=11),
-                )
-                _fig_age_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
-                                          coloraxis_showscale=False, showlegend=False)
-                st.plotly_chart(_fig_age_s, use_container_width=True)
-            with _dm2:
-                _gender_d = _subset["gender"].fillna("Missing").value_counts().reset_index()
-                _gender_d.columns = ["Gender", "Count"]
-                _gcmap_s  = {"Male": "#89C4E1", "Female": "#FFB7C5", "Missing": "#CCCCCC"}
-                _fig_gen_s = go.Figure(go.Pie(
-                    labels=_gender_d["Gender"], values=_gender_d["Count"],
-                    hole=0.4,
-                    marker=dict(colors=[_gcmap_s.get(g, "#DDDDDD") for g in _gender_d["Gender"]]),
-                    textinfo="percent+label",
-                ))
-                _fig_gen_s.update_layout(title="Gender", height=300,
-                                          margin=dict(l=20, r=20, t=50, b=30),
-                                          showlegend=False)
-                st.plotly_chart(_fig_gen_s, use_container_width=True)
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            # Row 2: Tenure + Deposit + States
-            _dm3, _dm4, _dm5 = st.columns(3)
-            with _dm3:
-                _fig_ten_s = px.histogram(_subset, x="tenure_years", nbins=20,
-                                           title="Tenure Distribution",
-                                           labels={"tenure_years": "Tenure (years)"},
-                                           color_discrete_sequence=["#4C9BE8"])
-                _k_ten_s = _kde_mm(_subset["tenure_years"], 20, "#1a3a6b")
-                if _k_ten_s:
-                    _fig_ten_s.add_trace(_k_ten_s)
-                _ten_med_s = float(_subset["tenure_years"].dropna().median()) if _subset["tenure_years"].notna().any() else 0.0
-                _fig_ten_s.add_vline(x=_ten_med_s, line=dict(color="red", width=2, dash="dash"),
-                                     annotation_text=f"Median: {_ten_med_s:.1f}y",
-                                     annotation_position="top right",
-                                     annotation_font=dict(color="red", size=11))
-                _fig_ten_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
-                st.plotly_chart(_fig_ten_s, use_container_width=True)
-            with _dm4:
-                _dep_p99_s = float(_subset["amount_deposit_spot_balance"].dropna().quantile(0.99) or 1.0)
-                _dep_sub   = _subset[_subset["amount_deposit_spot_balance"] <= _dep_p99_s]
-                _fig_dep_s = px.histogram(_dep_sub, x="amount_deposit_spot_balance", nbins=25,
-                                           title="Deposit Balance",
-                                           labels={"amount_deposit_spot_balance": "Balance ($)"},
-                                           color_discrete_sequence=["#F4A261"])
-                _k_dep_s = _kde_mm(_subset["amount_deposit_spot_balance"], 25, "#7a3100")
-                if _k_dep_s:
-                    _fig_dep_s.add_trace(_k_dep_s)
-                _dep_med_s = float(_subset["amount_deposit_spot_balance"].dropna().median()) if _subset["amount_deposit_spot_balance"].notna().any() else 0.0
-                _fig_dep_s.add_vline(x=_dep_med_s, line=dict(color="red", width=2, dash="dash"),
-                                     annotation_text=f"Median: ${_dep_med_s:,.0f}",
-                                     annotation_position="top right",
-                                     annotation_font=dict(color="red", size=11))
-                _fig_dep_s.update_xaxes(range=[0, _dep_p99_s])
-                _fig_dep_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
-                st.plotly_chart(_fig_dep_s, use_container_width=True)
-            with _dm5:
-                if "state" in _subset.columns:
-                    _state_s = _subset["state"].value_counts().head(10).reset_index()
-                    _state_s.columns = ["State", "Customers"]
-                    _fig_states_s = px.bar(_state_s, x="Customers", y="State", orientation="h",
-                                           title="Top 10 States",
-                                           color="Customers", color_continuous_scale="Teal")
-                    _fig_states_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
-                                                coloraxis_showscale=False,
-                                                yaxis=dict(categoryorder="total ascending"))
-                    st.plotly_chart(_fig_states_s, use_container_width=True)
-
-            st.markdown("<br>", unsafe_allow_html=True)
-
-            # Row 3: Product ownership rates + # Products held
-            _dm6, _dm7 = st.columns(2)
-            with _dm6:
-                _prod_cols_s = [c for c in PRODUCT_COLS if c in _subset.columns]
-                if _prod_cols_s:
-                    _prod_rates_s = (_subset[_prod_cols_s].mean() * 100).sort_values(ascending=True).reset_index()
-                    _prod_rates_s.columns = ["Product", "% with product"]
-                    _fig_prods_s = px.bar(_prod_rates_s, x="% with product", y="Product", orientation="h",
-                                          title="Product Ownership Rates", color="% with product",
-                                          color_continuous_scale="Purpor",
-                                          text=_prod_rates_s["% with product"].map(lambda v: f"{v:.1f}%"))
-                    _fig_prods_s.update_traces(textposition="outside")
-                    _fig_prods_s.update_layout(height=340, margin=dict(l=20, r=80, t=40, b=20),
-                                               coloraxis_showscale=False,
-                                               xaxis=dict(ticksuffix="%", range=[0, 100]))
-                    st.plotly_chart(_fig_prods_s, use_container_width=True)
-            with _dm7:
-                _nprod_d = _subset["n_products"].value_counts().sort_index().reset_index()
-                _nprod_d.columns = ["Products", "Customers"]
-                _fig_np_s = px.bar(_nprod_d, x="Products", y="Customers",
-                                    title="# Products Held",
-                                    color="Customers", color_continuous_scale="YlOrRd")
-                _fig_np_s.add_scatter(x=_nprod_d["Products"], y=_nprod_d["Customers"],
-                                      mode="lines+markers",
-                                      line=dict(color="#5a0000", width=2, shape="spline", smoothing=0.8),
-                                      marker=dict(size=6, color="#5a0000"), showlegend=False, name="")
-                _nprod_mean_s = float(_subset["n_products"].dropna().mean()) if _subset["n_products"].notna().any() else 0.0
-                _fig_np_s.add_vline(x=_nprod_mean_s, line=dict(color="red", width=2, dash="dash"),
-                                    annotation_text=f"Mean: {_nprod_mean_s:.1f}",
-                                    annotation_position="top right",
-                                    annotation_font=dict(color="red", size=11))
-                _fig_np_s.update_layout(height=340, margin=dict(l=20, r=20, t=50, b=30),
-                                         coloraxis_showscale=False)
-                st.plotly_chart(_fig_np_s, use_container_width=True)
-
-            # Row 4: Deposits vs IXI scatter with percentile contours (full width)
-            if "total_deposits_ixi" in _subset.columns and "sow" in _subset.columns:
-                st.markdown("<br>", unsafe_allow_html=True)
-                _sow_df_s = _subset[["amount_deposit_spot_balance", "total_deposits_ixi", "sow"]].dropna()
-                if len(_sow_df_s) > 0:
-                    _sow_df_s = _sow_df_s[
-                        (_sow_df_s["amount_deposit_spot_balance"] <= 200_000) &
-                        (_sow_df_s["total_deposits_ixi"] <= 1_500_000)
-                    ]
-                    _sow_mean_s = float(_sow_df_s["sow"].mean()) if len(_sow_df_s) > 0 else float("nan")
-                    _fig_sow_s = px.scatter(
-                        _sow_df_s, x="amount_deposit_spot_balance", y="total_deposits_ixi",
-                        color="sow", color_continuous_scale="RdYlGn", range_color=[0, 1],
-                        title=f"Deposits VS IXI (SoW {_sow_mean_s:.1%})" if not np.isnan(_sow_mean_s) else "Deposits VS IXI (SoW)",
-                        labels={"amount_deposit_spot_balance": "Deposit ($)",
-                                "total_deposits_ixi": "IXI ($)", "sow": "SoW"},
-                        opacity=0.5,
+                # Row 1: Age (wide) + Gender (narrow)
+                _dm1, _dm2 = st.columns([3, 2])
+                with _dm1:
+                    _age_bins_s  = [18, 25, 35, 45, 55, 65, 75, 120]
+                    _age_lbls_s  = ["18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"]
+                    _sub_age     = pd.cut(_subset["age"], bins=_age_bins_s, labels=_age_lbls_s, right=False)
+                    _age_d       = _sub_age.value_counts().reindex(_age_lbls_s).fillna(0).reset_index()
+                    _age_d.columns = ["Age group", "Customers"]
+                    _fig_age_s = px.bar(_age_d, x="Age group", y="Customers",
+                                        title="Age Distribution",
+                                        color="Customers", color_continuous_scale="Blues")
+                    _fig_age_s.add_scatter(x=_age_d["Age group"], y=_age_d["Customers"],
+                                           mode="lines+markers",
+                                           line=dict(color="#103060", width=2, shape="spline", smoothing=1.0),
+                                           marker=dict(size=5, color="#103060"), showlegend=False, name="")
+                    _age_mean_s = float(_subset["age"].dropna().mean()) if _subset["age"].notna().any() else 0.0
+                    _age_mean_bin_s = str(pd.cut([_age_mean_s], bins=_age_bins_s, labels=_age_lbls_s, right=False)[0])
+                    _fig_age_s.add_shape(
+                        type="line", xref="x", yref="paper",
+                        x0=_age_mean_bin_s, x1=_age_mean_bin_s, y0=0, y1=1,
+                        line=dict(color="red", width=2, dash="dash"),
                     )
-                    _fig_sow_s.update_xaxes(range=[0, 200_000])
-                    _fig_sow_s.update_yaxes(range=[0, 1_500_000])
-                    if len(_sow_df_s) >= 20:
-                        import matplotlib
-                        matplotlib.use('Agg')
-                        import matplotlib.pyplot as _plt_s
-                        from scipy.stats import gaussian_kde as _gkde_sow_s
-                        from scipy.ndimage import gaussian_filter as _gf_s
-                        _xs_s = _sow_df_s["amount_deposit_spot_balance"].values
-                        _ys_s = _sow_df_s["total_deposits_ixi"].values
-                        _sow_vals_s = _sow_df_s["sow"].values
-                        _kde_n_s = len(_xs_s)
-                        if _kde_n_s > 2000:
-                            _rng_s = np.random.default_rng(0)
-                            _idx_s = _rng_s.choice(_kde_n_s, 2000, replace=False)
-                            _xs_kde_s, _ys_kde_s = _xs_s[_idx_s], _ys_s[_idx_s]
-                        else:
-                            _xs_kde_s, _ys_kde_s = _xs_s, _ys_s
-                        try:
-                            _kde_sow_s = _gkde_sow_s(np.vstack([_xs_kde_s, _ys_kde_s]), bw_method=0.3)
-                            _xi_s = np.linspace(_xs_s.min(), _xs_s.max(), 200)
-                            _yi_s = np.linspace(_ys_s.min(), _ys_s.max(), 200)
-                            _XX_s, _YY_s = np.meshgrid(_xi_s, _yi_s)
-                            _ZZ_s = _kde_sow_s(np.vstack([_XX_s.ravel(), _YY_s.ravel()])).reshape(_XX_s.shape)
-                            _ZZ_s = _gf_s(_ZZ_s, sigma=3)
-                            _z_pts_s = _kde_sow_s(np.vstack([_xs_kde_s, _ys_kde_s]))
-                            _sow_vals_s = _sow_vals_s[_idx_s] if _kde_n_s > 2000 else _sow_vals_s
-                            for _plbl_s, _clr_s in [
-                                (90, "#2166ac"),
-                                (50, "#1a9850"),
-                                (25, "#f4a11d"),
-                                (10, "#c0392b"),
-                            ]:
-                                _lvl_s = float(np.percentile(_z_pts_s, 100 - _plbl_s))
-                                if _lvl_s <= 0:
-                                    continue
-                                _mask_s = _z_pts_s >= _lvl_s
-                                _sow_grp_s = float(np.mean(_sow_vals_s[_mask_s])) if _mask_s.any() else float('nan')
-                                _sow_lbl_s = f" (SoW {_sow_grp_s:.1%})" if not np.isnan(_sow_grp_s) else ""
-                                _fig_sow_s.add_trace(go.Scatter(
-                                    x=[None], y=[None], mode='lines',
-                                    line=dict(color=_clr_s, width=2.5),
-                                    name=f'{_plbl_s}th pct{_sow_lbl_s}',
-                                    legendgroup=f'pct{_plbl_s}_s', showlegend=True,
-                                ))
-                                _mfig_s, _max_s = _plt_s.subplots()
-                                _cs_s = _max_s.contour(_XX_s, _YY_s, _ZZ_s, levels=[_lvl_s])
-                                _plt_s.close(_mfig_s)
-                                for _seg_s in _cs_s.get_paths():
-                                    _verts_s = _seg_s.vertices
-                                    if len(_verts_s) < 5:
+                    _fig_age_s.add_annotation(
+                        x=_age_mean_bin_s, yref="paper", y=1.05,
+                        text=f"Mean: {_age_mean_s:.1f}y", showarrow=False,
+                        xanchor="left", font=dict(color="red", size=11),
+                    )
+                    _fig_age_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
+                                              coloraxis_showscale=False, showlegend=False)
+                    st.plotly_chart(_fig_age_s, use_container_width=True)
+                with _dm2:
+                    _gender_d = _subset["gender"].fillna("Missing").value_counts().reset_index()
+                    _gender_d.columns = ["Gender", "Count"]
+                    _gcmap_s  = {"Male": "#89C4E1", "Female": "#FFB7C5", "Missing": "#CCCCCC"}
+                    _fig_gen_s = go.Figure(go.Pie(
+                        labels=_gender_d["Gender"], values=_gender_d["Count"],
+                        hole=0.4,
+                        marker=dict(colors=[_gcmap_s.get(g, "#DDDDDD") for g in _gender_d["Gender"]]),
+                        textinfo="percent+label",
+                    ))
+                    _fig_gen_s.update_layout(title="Gender", height=300,
+                                              margin=dict(l=20, r=20, t=50, b=30),
+                                              showlegend=False)
+                    st.plotly_chart(_fig_gen_s, use_container_width=True)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Row 2: Tenure + Deposit + States
+                _dm3, _dm4, _dm5 = st.columns(3)
+                with _dm3:
+                    _fig_ten_s = px.histogram(_subset, x="tenure_years", nbins=20,
+                                               title="Tenure Distribution",
+                                               labels={"tenure_years": "Tenure (years)"},
+                                               color_discrete_sequence=["#4C9BE8"])
+                    _k_ten_s = _kde_mm(_subset["tenure_years"], 20, "#1a3a6b")
+                    if _k_ten_s:
+                        _fig_ten_s.add_trace(_k_ten_s)
+                    _ten_med_s = float(_subset["tenure_years"].dropna().median()) if _subset["tenure_years"].notna().any() else 0.0
+                    _fig_ten_s.add_vline(x=_ten_med_s, line=dict(color="red", width=2, dash="dash"),
+                                         annotation_text=f"Median: {_ten_med_s:.1f}y",
+                                         annotation_position="top right",
+                                         annotation_font=dict(color="red", size=11))
+                    _fig_ten_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
+                    st.plotly_chart(_fig_ten_s, use_container_width=True)
+                with _dm4:
+                    _dep_p99_s = float(_subset["amount_deposit_spot_balance"].dropna().quantile(0.99) or 1.0)
+                    _dep_sub   = _subset[_subset["amount_deposit_spot_balance"] <= _dep_p99_s]
+                    _fig_dep_s = px.histogram(_dep_sub, x="amount_deposit_spot_balance", nbins=25,
+                                               title="Deposit Balance",
+                                               labels={"amount_deposit_spot_balance": "Balance ($)"},
+                                               color_discrete_sequence=["#F4A261"])
+                    _k_dep_s = _kde_mm(_subset["amount_deposit_spot_balance"], 25, "#7a3100")
+                    if _k_dep_s:
+                        _fig_dep_s.add_trace(_k_dep_s)
+                    _dep_med_s = float(_subset["amount_deposit_spot_balance"].dropna().median()) if _subset["amount_deposit_spot_balance"].notna().any() else 0.0
+                    _fig_dep_s.add_vline(x=_dep_med_s, line=dict(color="red", width=2, dash="dash"),
+                                         annotation_text=f"Median: ${_dep_med_s:,.0f}",
+                                         annotation_position="top right",
+                                         annotation_font=dict(color="red", size=11))
+                    _fig_dep_s.update_xaxes(range=[0, _dep_p99_s])
+                    _fig_dep_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
+                    st.plotly_chart(_fig_dep_s, use_container_width=True)
+                with _dm5:
+                    if "state" in _subset.columns:
+                        _state_s = _subset["state"].value_counts().head(10).reset_index()
+                        _state_s.columns = ["State", "Customers"]
+                        _fig_states_s = px.bar(_state_s, x="Customers", y="State", orientation="h",
+                                               title="Top 10 States",
+                                               color="Customers", color_continuous_scale="Teal")
+                        _fig_states_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
+                                                    coloraxis_showscale=False,
+                                                    yaxis=dict(categoryorder="total ascending"))
+                        st.plotly_chart(_fig_states_s, use_container_width=True)
+
+                st.markdown("<br>", unsafe_allow_html=True)
+
+                # Row 3: Product ownership rates + # Products held
+                _dm6, _dm7 = st.columns(2)
+                with _dm6:
+                    _prod_cols_s = [c for c in PRODUCT_COLS if c in _subset.columns]
+                    if _prod_cols_s:
+                        _prod_rates_s = (_subset[_prod_cols_s].mean() * 100).sort_values(ascending=True).reset_index()
+                        _prod_rates_s.columns = ["Product", "% with product"]
+                        _fig_prods_s = px.bar(_prod_rates_s, x="% with product", y="Product", orientation="h",
+                                              title="Product Ownership Rates", color="% with product",
+                                              color_continuous_scale="Purpor",
+                                              text=_prod_rates_s["% with product"].map(lambda v: f"{v:.1f}%"))
+                        _fig_prods_s.update_traces(textposition="outside")
+                        _fig_prods_s.update_layout(height=340, margin=dict(l=20, r=80, t=40, b=20),
+                                                   coloraxis_showscale=False,
+                                                   xaxis=dict(ticksuffix="%", range=[0, 100]))
+                        st.plotly_chart(_fig_prods_s, use_container_width=True)
+                with _dm7:
+                    _nprod_d = _subset["n_products"].value_counts().sort_index().reset_index()
+                    _nprod_d.columns = ["Products", "Customers"]
+                    _fig_np_s = px.bar(_nprod_d, x="Products", y="Customers",
+                                        title="# Products Held",
+                                        color="Customers", color_continuous_scale="YlOrRd")
+                    _fig_np_s.add_scatter(x=_nprod_d["Products"], y=_nprod_d["Customers"],
+                                          mode="lines+markers",
+                                          line=dict(color="#5a0000", width=2, shape="spline", smoothing=0.8),
+                                          marker=dict(size=6, color="#5a0000"), showlegend=False, name="")
+                    _nprod_mean_s = float(_subset["n_products"].dropna().mean()) if _subset["n_products"].notna().any() else 0.0
+                    _fig_np_s.add_vline(x=_nprod_mean_s, line=dict(color="red", width=2, dash="dash"),
+                                        annotation_text=f"Mean: {_nprod_mean_s:.1f}",
+                                        annotation_position="top right",
+                                        annotation_font=dict(color="red", size=11))
+                    _fig_np_s.update_layout(height=340, margin=dict(l=20, r=20, t=50, b=30),
+                                             coloraxis_showscale=False)
+                    st.plotly_chart(_fig_np_s, use_container_width=True)
+
+                # Row 4: Deposits vs IXI scatter with percentile contours (full width)
+                if "total_deposits_ixi" in _subset.columns and "sow" in _subset.columns:
+                    st.markdown("<br>", unsafe_allow_html=True)
+                    _sow_df_s = _subset[["amount_deposit_spot_balance", "total_deposits_ixi", "sow"]].dropna()
+                    if len(_sow_df_s) > 0:
+                        _sow_df_s = _sow_df_s[
+                            (_sow_df_s["amount_deposit_spot_balance"] <= 200_000) &
+                            (_sow_df_s["total_deposits_ixi"] <= 1_500_000)
+                        ]
+                        _sow_mean_s = float(_sow_df_s["sow"].mean()) if len(_sow_df_s) > 0 else float("nan")
+                        _fig_sow_s = px.scatter(
+                            _sow_df_s, x="amount_deposit_spot_balance", y="total_deposits_ixi",
+                            color="sow", color_continuous_scale="RdYlGn", range_color=[0, 1],
+                            title=f"Deposits VS IXI (SoW {_sow_mean_s:.1%})" if not np.isnan(_sow_mean_s) else "Deposits VS IXI (SoW)",
+                            labels={"amount_deposit_spot_balance": "Deposit ($)",
+                                    "total_deposits_ixi": "IXI ($)", "sow": "SoW"},
+                            opacity=0.5,
+                        )
+                        _fig_sow_s.update_xaxes(range=[0, 200_000])
+                        _fig_sow_s.update_yaxes(range=[0, 1_500_000])
+                        if len(_sow_df_s) >= 20:
+                            import matplotlib
+                            matplotlib.use('Agg')
+                            import matplotlib.pyplot as _plt_s
+                            from scipy.stats import gaussian_kde as _gkde_sow_s
+                            from scipy.ndimage import gaussian_filter as _gf_s
+                            _xs_s = _sow_df_s["amount_deposit_spot_balance"].values
+                            _ys_s = _sow_df_s["total_deposits_ixi"].values
+                            _sow_vals_s = _sow_df_s["sow"].values
+                            _kde_n_s = len(_xs_s)
+                            if _kde_n_s > 2000:
+                                _rng_s = np.random.default_rng(0)
+                                _idx_s = _rng_s.choice(_kde_n_s, 2000, replace=False)
+                                _xs_kde_s, _ys_kde_s = _xs_s[_idx_s], _ys_s[_idx_s]
+                            else:
+                                _xs_kde_s, _ys_kde_s = _xs_s, _ys_s
+                            try:
+                                _kde_sow_s = _gkde_sow_s(np.vstack([_xs_kde_s, _ys_kde_s]), bw_method=0.3)
+                                _xi_s = np.linspace(_xs_s.min(), _xs_s.max(), 200)
+                                _yi_s = np.linspace(_ys_s.min(), _ys_s.max(), 200)
+                                _XX_s, _YY_s = np.meshgrid(_xi_s, _yi_s)
+                                _ZZ_s = _kde_sow_s(np.vstack([_XX_s.ravel(), _YY_s.ravel()])).reshape(_XX_s.shape)
+                                _ZZ_s = _gf_s(_ZZ_s, sigma=3)
+                                _z_pts_s = _kde_sow_s(np.vstack([_xs_kde_s, _ys_kde_s]))
+                                _sow_vals_s = _sow_vals_s[_idx_s] if _kde_n_s > 2000 else _sow_vals_s
+                                for _plbl_s, _clr_s in [
+                                    (90, "#2166ac"), (50, "#1a9850"),
+                                    (25, "#f4a11d"), (10, "#c0392b"),
+                                ]:
+                                    _lvl_s = float(np.percentile(_z_pts_s, 100 - _plbl_s))
+                                    if _lvl_s <= 0:
                                         continue
-                                    _myi_s = int(np.argmin(_verts_s[:, 1]))
-                                    _mxi_s = int(np.argmin(_verts_s[:, 0]))
-                                    _n_s   = len(_verts_s)
-                                    _rol_s = np.roll(_verts_s, -_myi_s, axis=0)
-                                    _nmx_s = (_mxi_s - _myi_s) % _n_s
-                                    _arc_a_s = _rol_s[:_nmx_s + 1]
-                                    _arc_b_s = _rol_s[_nmx_s:]
-                                    if _arc_a_s.shape[0] < 3 or _arc_b_s.shape[0] < 3:
-                                        _opn_s = _rol_s
-                                    elif np.mean(_arc_a_s[:, 0] + _arc_a_s[:, 1]) >= np.mean(_arc_b_s[:, 0] + _arc_b_s[:, 1]):
-                                        _opn_s = _arc_a_s
-                                    else:
-                                        _opn_s = _arc_b_s
-                                    _pts_s = np.vstack([
-                                        [max(float(_opn_s[0, 0]), 0), 0],
-                                        _opn_s,
-                                        [0, max(float(_opn_s[-1, 1]), 0)],
-                                    ])
-                                    _svg_s = "M " + " L ".join(f"{float(_px):.4f},{float(_py):.4f}" for _px, _py in _pts_s)
-                                    _fig_sow_s.add_shape(
-                                        type='path', path=_svg_s,
-                                        xref='x', yref='y',
+                                    _mask_s = _z_pts_s >= _lvl_s
+                                    _sow_grp_s = float(np.mean(_sow_vals_s[_mask_s])) if _mask_s.any() else float("nan")
+                                    _sow_lbl_s = f" (SoW {_sow_grp_s:.1%})" if not np.isnan(_sow_grp_s) else ""
+                                    _fig_sow_s.add_trace(go.Scatter(
+                                        x=[None], y=[None], mode="lines",
                                         line=dict(color=_clr_s, width=2.5),
-                                        fillcolor='rgba(0,0,0,0)',
-                                        layer='above',
-                                    )
-                        except Exception:
-                            pass
-                    _fig_sow_s.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
-                                             legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)',
-                                                         bordercolor='#aaa', borderwidth=1))
-                    st.plotly_chart(_fig_sow_s, use_container_width=True)
+                                        name=f"{_plbl_s}th pct{_sow_lbl_s}",
+                                        legendgroup=f"pct{_plbl_s}_s", showlegend=True,
+                                    ))
+                                    _mfig_s, _max_s = _plt_s.subplots()
+                                    _cs_s = _max_s.contour(_XX_s, _YY_s, _ZZ_s, levels=[_lvl_s])
+                                    _plt_s.close(_mfig_s)
+                                    for _seg_s in _cs_s.get_paths():
+                                        _verts_s = _seg_s.vertices
+                                        if len(_verts_s) < 5:
+                                            continue
+                                        _myi_s = int(np.argmin(_verts_s[:, 1]))
+                                        _mxi_s = int(np.argmin(_verts_s[:, 0]))
+                                        _n_s   = len(_verts_s)
+                                        _rol_s = np.roll(_verts_s, -_myi_s, axis=0)
+                                        _nmx_s = (_mxi_s - _myi_s) % _n_s
+                                        _arc_a_s = _rol_s[:_nmx_s + 1]
+                                        _arc_b_s = _rol_s[_nmx_s:]
+                                        if _arc_a_s.shape[0] < 3 or _arc_b_s.shape[0] < 3:
+                                            _opn_s = _rol_s
+                                        elif np.mean(_arc_a_s[:, 0] + _arc_a_s[:, 1]) >= np.mean(_arc_b_s[:, 0] + _arc_b_s[:, 1]):
+                                            _opn_s = _arc_a_s
+                                        else:
+                                            _opn_s = _arc_b_s
+                                        _pts_s = np.vstack([
+                                            [max(float(_opn_s[0, 0]), 0), 0],
+                                            _opn_s,
+                                            [0, max(float(_opn_s[-1, 1]), 0)],
+                                        ])
+                                        _svg_s = "M " + " L ".join(f"{float(_px):.4f},{float(_py):.4f}" for _px, _py in _pts_s)
+                                        _fig_sow_s.add_shape(
+                                            type="path", path=_svg_s,
+                                            xref="x", yref="y",
+                                            line=dict(color=_clr_s, width=2.5),
+                                            fillcolor="rgba(0,0,0,0)",
+                                            layer="above",
+                                        )
+                            except Exception:
+                                pass
+                        _fig_sow_s.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
+                                                 legend=dict(x=0.01, y=0.99, bgcolor="rgba(255,255,255,0.8)",
+                                                             bordercolor="#aaa", borderwidth=1))
+                        st.plotly_chart(_fig_sow_s, use_container_width=True)
+
             except Exception as _demo_err:
                 import traceback
                 st.error(f"Demographics rendering error: {_demo_err}")
                 st.code(traceback.format_exc())
+
+
 # ══════════════════════════════════════════════════════════
 if active_campaign == "SELECTCHK":
 
