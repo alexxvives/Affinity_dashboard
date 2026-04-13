@@ -583,6 +583,9 @@ def style_tbl(
 
     fmt = {col: _fmt_pct for col in pct_cols if col in disp.columns}
     fmt.update({col: "{:,.0f}" for col in n_cols if col in disp.columns})
+    for _tc in ["% Targeted", "% Population", "Targeting Lift"]:
+        if _tc in disp.columns:
+            fmt[_tc] = _fmt_pct
 
     def _colour_col(col_series: pd.Series) -> pd.Series:
         return col_series.map(_rdylgn)
@@ -612,6 +615,11 @@ def style_tbl(
         styler = styler.apply(_colour_col, subset=lift_val_cols, axis=0)
     if n_cols:
         styler = styler.apply(lambda s: s.map(_n_color), subset=n_cols, axis=0)
+    if "Targeting Lift" in disp.columns:
+        styler = styler.apply(
+            lambda s: s.map(lambda v: _rdylgn(v, lo=-0.05, hi=0.05) if pd.notna(v) else ""),
+            subset=["Targeting Lift"], axis=0,
+        )
 
     table_html = styler.to_html()
 
@@ -812,6 +820,7 @@ def _styled_html_table(
             r'(<th[^>]*class="[^"]*row_heading[^"]*"[^>]*)>([^<]*)</th>',
             _tip, html,
         )
+    _ix_w = index_max_width if index_max_width else 50
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><style>
   * {{ box-sizing: border-box; }}
@@ -821,16 +830,40 @@ def _styled_html_table(
   thead th {{ background: #262730; color: #fafafa; padding: 6px 10px;
               text-align: left; position: sticky; top: 0; z-index: 2;
               border-bottom: 2px solid #555; white-space: nowrap; font-size: 11px; }}
+  thead th:not(.blank) {{ cursor: pointer; user-select: none; }}
+  thead th:not(.blank):hover {{ background: #3a3c4a; }}
   tbody td {{ padding: 4px 10px; border-bottom: 1px solid #333; white-space: nowrap; color: #111; }}
   tbody tr:hover td {{ outline: 1px solid #666; }}
   th.row_heading {{ background: #1c1e2a !important; font-size: 11px;
                     color: #ccc !important; font-weight: normal; cursor: help;
-                    padding: 4px 6px 4px 6px; min-width: 50px;
-                    {('max-width: ' + str(index_max_width) + 'px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;') if index_max_width else ''} }}
+                    padding: 4px 6px 4px 6px;
+                    min-width: {_ix_w}px; max-width: {_ix_w}px;
+                    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }}
   th.blank {{ background: #262730 !important; }}
 </style></head><body>
 <div style="overflow:auto; max-height:{height - 20}px;">{html}</div>
 <script>(function(){{
+  var ths = document.querySelectorAll('thead tr th:not(.blank)');
+  var dir = {{}};
+  ths.forEach(function(th, idx) {{
+    th.addEventListener('click', function() {{
+      var asc = !dir[idx]; dir[idx] = asc;
+      var tbody = document.querySelector('tbody');
+      var rows = Array.from(tbody.querySelectorAll('tr'));
+      rows.sort(function(a, b) {{
+        var tds_a = a.querySelectorAll('td');
+        var tds_b = b.querySelectorAll('td');
+        var av = (tds_a[idx] || {{innerText:''}}).innerText.replace(/[%,$\u20ac]/g,'').trim();
+        var bv = (tds_b[idx] || {{innerText:''}}).innerText.replace(/[%,$\u20ac]/g,'').trim();
+        var an = parseFloat(av), bn = parseFloat(bv);
+        if (!isNaN(an) && !isNaN(bn)) return asc ? an-bn : bn-an;
+        return asc ? av.localeCompare(bv) : bv.localeCompare(av);
+      }});
+      rows.forEach(function(r){{ tbody.appendChild(r); }});
+    }});
+  }});
+}})();
+(function(){{
   var tt=document.createElement('div');
   tt.style.cssText='position:fixed;background:#1e2030;color:#eee;font-size:11px;padding:5px 9px;border-radius:4px;border:1px solid #555;z-index:99999;pointer-events:none;display:none;max-width:340px;word-wrap:break-word;line-height:1.5;white-space:normal;box-shadow:0 2px 8px rgba(0,0,0,.5);';
   document.body.appendChild(tt);
@@ -841,11 +874,10 @@ def _styled_html_table(
   }});
 }})();
 (function(){{
-  // Truncate long text cells in the Description column with ellipsis + title tooltip
-  var ths = document.querySelectorAll('thead th');
+  var ths2 = document.querySelectorAll('thead th');
   var descIdx = -1;
-  for (var i = 0; i < ths.length; i++) {{
-    if (ths[i].innerText.trim() === 'Description') {{ descIdx = i - 1; break; }}
+  for (var i = 0; i < ths2.length; i++) {{
+    if (ths2[i].innerText.trim() === 'Description') {{ descIdx = i - 1; break; }}
   }}
   if (descIdx < 0) return;
   document.querySelectorAll('tbody tr').forEach(function(tr) {{
@@ -2216,6 +2248,19 @@ if active_campaign == "SELECTCHK":
             tbl = build_table(df, ordered_comms, all_mode, min_n, bal_baseline_min,
                               combo_treated_keys=_combo_treated_keys, _ver=2)
 
+        # ── Targeting coverage columns ────────────────────────────────────────
+        if not tbl.empty:
+            _n_sel_t = int(df[df["contact_flag"] == 1]["alpha_key"].nunique())
+            _n_sel_c = int(df[df["control_flag"] == 1]["alpha_key"].nunique())
+            _seg_t_ct = (df[df["contact_flag"] == 1]
+                         .groupby("nsegment")["alpha_key"].nunique().rename(index=str))
+            _seg_c_ct = (df[df["control_flag"] == 1]
+                         .groupby("nsegment")["alpha_key"].nunique().rename(index=str))
+            _s_idx = tbl.index.astype(str)
+            tbl["% Targeted"] = (_seg_t_ct.reindex(_s_idx).fillna(0) / max(_n_sel_t, 1)).values
+            tbl["% Population"] = (_seg_c_ct.reindex(_s_idx).fillna(0) / max(_n_sel_c, 1)).values
+            tbl["Targeting Lift"] = (tbl["% Targeted"] - tbl["% Population"]).values
+
         if tbl.empty:
             # Show diagnostic info so user knows exactly why nothing appears
             _n_treated  = int(df[df["contact_flag"] == 1]["alpha_key"].nunique())
@@ -2675,8 +2720,9 @@ if active_campaign == "SELECTCHK":
             # ── Send recommended segments to Simulator ───────────────────────
             if _ra_shown_segs:
                 st.markdown(
-                    '<style>div:has(>#_ra_send_anchor)+div[data-testid="element-container"]'
-                    '{margin-top:-28px!important}</style><div id="_ra_send_anchor"></div>',
+                    '<style>div:has(>#_ra_send_anchor)+div[data-testid="element-container"],'
+                    'div:has(>#_ra_send_anchor)+div[data-testid="stHorizontalBlock"]'
+                    '{margin-top:-40px!important}</style><div id="_ra_send_anchor"></div>',
                     unsafe_allow_html=True,
                 )
                 _, _ra_btn_col, _ = st.columns([1, 2, 1])
@@ -3870,6 +3916,18 @@ elif active_campaign == "CC_BT":
             }
             _bt_disp = _bt_disp.rename(columns=_col_rename)
 
+            # ── Targeting coverage columns ────────────────────────────────────
+            _n_bt_t = int(_bt_df[_bt_df["control_flag"] == 0]["alpha_key"].nunique())
+            _n_bt_c = int(_bt_df[_bt_df["control_flag"] == 1]["alpha_key"].nunique())
+            _bt_seg_t = (_bt_df[_bt_df["control_flag"] == 0]
+                         .groupby("nsegment")["alpha_key"].nunique().rename(index=str))
+            _bt_seg_c = (_bt_df[_bt_df["control_flag"] == 1]
+                         .groupby("nsegment")["alpha_key"].nunique().rename(index=str))
+            _bt_idx2 = _bt_disp.index
+            _bt_disp["% Targeted"] = (_bt_seg_t.reindex(_bt_idx2).fillna(0) / max(_n_bt_t, 1)).values
+            _bt_disp["% Population"] = (_bt_seg_c.reindex(_bt_idx2).fillna(0) / max(_n_bt_c, 1)).values
+            _bt_disp["Targeting Lift"] = (_bt_disp["% Targeted"] - _bt_disp["% Population"]).values
+
             # Colour the lift column
             def _bt_colour(series):
                 return series.map(
@@ -3877,7 +3935,8 @@ elif active_campaign == "CC_BT":
                     if isinstance(v, (int, float)) and not pd.isna(v) else ""
                 )
 
-            _fmt_map = {_val_label: _fmt_fn, "±CI": _fmt_fn}
+            _fmt_map = {_val_label: _fmt_fn, "±CI": _fmt_fn,
+                        "% Targeted": "{:.1%}", "% Population": "{:.1%}", "Targeting Lift": "{:+.1%}"}
             _styled_bt = _bt_disp.style.format(_fmt_map, na_rep="")
             if "N (treated)" in _bt_disp.columns:
                 _styled_bt = _styled_bt.format(
@@ -3885,10 +3944,16 @@ elif active_campaign == "CC_BT":
                 )
             if _val_label in _bt_disp.columns:
                 _styled_bt = _styled_bt.apply(_bt_colour, subset=[_val_label], axis=0)
+            if "Targeting Lift" in _bt_disp.columns:
+                _styled_bt = _styled_bt.apply(
+                    lambda s: s.map(lambda v: _rdylgn(v, lo=-0.05, hi=0.05) if isinstance(v, float) and pd.notna(v) else ""),
+                    subset=["Targeting Lift"], axis=0,
+                )
 
             _bt_h = max(300, min(800, 60 + len(_bt_disp) * 26))
             components.html(
-                _styled_html_table(_styled_bt, height=_bt_h, index_max_width=40),
+                _styled_html_table(_styled_bt, height=_bt_h, index_max_width=40,
+                                   seg_labels=SEGMENT_LABELS, seg_desc=SEGMENT_DESCRIPTIONS),
                 height=_bt_h, scrolling=True,
             )
 
@@ -4025,8 +4090,9 @@ elif active_campaign == "CC_BT":
                 st.info(f"No {_bt_ra_label} data available.")
             if _bt_ra_shown_segs:
                 st.markdown(
-                    '<style>div:has(>#_bt_ra_send_anchor)+div[data-testid="element-container"]'
-                    '{margin-top:-28px!important}</style><div id="_bt_ra_send_anchor"></div>',
+                    '<style>div:has(>#_bt_ra_send_anchor)+div[data-testid="element-container"],'
+                    'div:has(>#_bt_ra_send_anchor)+div[data-testid="stHorizontalBlock"]'
+                    '{margin-top:-40px!important}</style><div id="_bt_ra_send_anchor"></div>',
                     unsafe_allow_html=True,
                 )
                 _, _bt_ra_btn_col, _ = st.columns([1, 2, 1])
