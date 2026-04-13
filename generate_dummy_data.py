@@ -157,8 +157,7 @@ def generate_cc_bt_campaign_data(n_users: int = 5000, seed: int = 42) -> pd.Data
     Campaign goal: convince customers to transfer existing debt to our credit card.
     - control_flag=1  → control group (did not receive the BT offer)
     - control_flag=0  → treated group (received the BT offer)
-    - BT_flag         → 1 if the customer completed a balance transfer, 0 otherwise
-    - BT_amount       → USD amount transferred (0 when BT_flag=0)
+    - BT_Transaction_Amount → USD amount transferred (0 when no transfer occurred)
     - nsegments       → list of segment IDs this customer belongs to (same pool as SELECTCHK)
     """
     rng = np.random.default_rng(seed)
@@ -197,7 +196,6 @@ def generate_cc_bt_campaign_data(n_users: int = 5000, seed: int = 42) -> pd.Data
         "alpha_key":             users,
         "control_flag":          control_flag,
         "BT_Transaction_Amount": BT_amount,
-        "BT_flag":               BT_flag,
         "nsegments":             nsegments,
         "BT_Transaction_Date": pd.to_datetime("2025-01-01") + pd.to_timedelta(
             rng.integers(0, 365, size=n_users), unit="D"
@@ -217,4 +215,6 @@ if __name__ == '__main__':
     print(f"\nCC_BT campaign written: CC_BT_campaign.csv")
     treated = cc_bt[cc_bt['control_flag'] == 0]
     control = cc_bt[cc_bt['control_flag'] == 1]
-    print(f"Rows: {len(cc_bt):,}   BT rate treated: {treated['BT_flag'].mean():.1%}   BT rate control: {control['BT_flag'].mean():.1%}")
+    bt_rate_t = (treated['BT_Transaction_Amount'] > 0).mean()
+    bt_rate_c = (control['BT_Transaction_Amount'] > 0).mean()
+    print(f"Rows: {len(cc_bt):,}   BT rate treated: {bt_rate_t:.1%}   BT rate control: {bt_rate_c:.1%}")
