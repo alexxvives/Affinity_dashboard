@@ -1,4 +1,4 @@
-alpha_key,control_flag,BT_amount,BT_flag,nsegments,bt_date
+alpha_key,control_flag,BT_Transaction_Amount,BT_flag,nsegments,BT_Transaction_Date
 user_00000,0,642.6,1,"['1000029', '1000005', '1000024', '1000004', '1000000']",2025-10-25
 user_00001,0,0.0,0,"['1000001', '1000015', '1000009', '1000005']",2025-06-25
 user_00002,0,0.0,0,"['1000000', '1000014', '1000029', '1000001']",2025-02-24

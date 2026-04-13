@@ -146,6 +146,12 @@ CAMPAIGNS: Dict[str, Dict] = {
 def _load_cc_bt(b: bytes) -> pd.DataFrame:
     df = pd.read_csv(io.BytesIO(b))
     df.columns = df.columns.str.lower().str.strip()
+    # Support legacy column names from older CSV exports
+    df = df.rename(columns={"bt_amount": "bt_transaction_amount",
+                             "bt_date":   "bt_transaction_date"})
+    # Derive bt_flag from amount if not present (flag=1 when a transfer occurred)
+    if "bt_flag" not in df.columns and "bt_transaction_amount" in df.columns:
+        df["bt_flag"] = (df["bt_transaction_amount"] > 0).astype(int)
     return df
 
 
@@ -154,12 +160,12 @@ def preprocess_cc_bt(df_raw: pd.DataFrame,
                      date_min: Optional[str] = None,
                      date_max: Optional[str] = None) -> pd.DataFrame:
     df = df_raw.copy()
-    if "bt_date" in df.columns and (date_min or date_max):
-        df["bt_date"] = pd.to_datetime(df["bt_date"], errors="coerce")
+    if "bt_transaction_date" in df.columns and (date_min or date_max):
+        df["bt_transaction_date"] = pd.to_datetime(df["bt_transaction_date"], errors="coerce")
         if date_min:
-            df = df[df["bt_date"] >= pd.Timestamp(date_min)]
+            df = df[df["bt_transaction_date"] >= pd.Timestamp(date_min)]
         if date_max:
-            df = df[df["bt_date"] <= pd.Timestamp(date_max)]
+            df = df[df["bt_transaction_date"] <= pd.Timestamp(date_max)]
     df["nsegments"] = df["nsegments"].apply(_try_parse_listlike)
     df["nsegments"] = df["nsegments"].apply(lambda xs: xs if xs else ["__NO_SEGMENT__"])
     df = df.explode("nsegments").rename(columns={"nsegments": "nsegment"})
@@ -181,13 +187,13 @@ def agg_cc_bt(df_bt: pd.DataFrame, min_n: int = 30) -> pd.DataFrame:
 
     mean_flag_t = g_t["bt_flag"].mean()
     mean_flag_c = g_c["bt_flag"].mean().reindex(mean_flag_t.index)
-    mean_amt_t  = g_t["bt_amount"].mean()
-    mean_amt_c  = g_c["bt_amount"].mean().reindex(mean_amt_t.index)
+    mean_amt_t  = g_t["bt_transaction_amount"].mean()
+    mean_amt_c  = g_c["bt_transaction_amount"].mean().reindex(mean_amt_t.index)
 
     std_ft = g_t["bt_flag"].std(ddof=0)
     std_fc = g_c["bt_flag"].std(ddof=0).reindex(mean_flag_t.index)
-    std_at = g_t["bt_amount"].std(ddof=0)
-    std_ac = g_c["bt_amount"].std(ddof=0).reindex(mean_flag_t.index)
+    std_at = g_t["bt_transaction_amount"].std(ddof=0)
+    std_ac = g_c["bt_transaction_amount"].std(ddof=0).reindex(mean_flag_t.index)
 
     se_ft = (std_ft / np.sqrt(n_t)).where(n_t >= 2)
     se_fc = (std_fc / np.sqrt(n_c)).where(n_c >= 2)
@@ -1032,7 +1038,7 @@ def _build_sim_excel(
         _nfmt  = wb.add_format({"num_format": "#,##0",  "border": 1, "align": "center"})
         _prop  = wb.add_format({"num_format": "0.0%",   "border": 1, "align": "center"})
         _txt   = wb.add_format({"border": 1, "text_wrap": True, "valign": "top"})
-        _eur   = wb.add_format({"num_format": "\u20ac#,##0", "border": 1, "align": "right"})
+        _eur   = wb.add_format({"num_format": "$#,##0", "border": 1, "align": "right"})
         _role  = {
             "NOT": wb.add_format({"bg_color": "#FFDDDD", "font_color": "#880000",
                                    "border": 1, "bold": True, "align": "center"}),
@@ -1115,7 +1121,7 @@ def _build_sim_excel(
             ws2 = wb.add_worksheet("Summary")
             _ew.sheets["Summary"] = ws2
             _sum_cols = [c for c in ["Communication", "Expected Lift", "Comm Users",
-                                      "Projected Bal \u20ac", "Proj. Accounts"] if c in summary_df.columns]
+                                      "Projected Bal $", "Proj. Accounts"] if c in summary_df.columns]
             ws2.set_row(0, 30)
             for _ci, _col in enumerate(_sum_cols):
                 ws2.write(0, _ci, _col, _hdr)
@@ -1129,7 +1135,7 @@ def _build_sim_excel(
                         ws2.write(_ri + 1, _ci, float(_v) if pd.notna(_v) else "", _pct)
                     elif _col in ("Comm Users", "Proj. Accounts"):
                         ws2.write(_ri + 1, _ci, int(_v) if pd.notna(_v) else "", _nfmt)
-                    elif _col == "Projected Bal \u20ac":
+                    elif _col == "Projected Bal $":
                         ws2.write(_ri + 1, _ci, float(_v) if pd.notna(_v) else "", _eur)
             if len(summary_df) > 0 and "Expected Lift" in _sum_cols:
                 _lci = _sum_cols.index("Expected Lift")
@@ -1138,7 +1144,7 @@ def _build_sim_excel(
                     "min_color": "#F8696B", "mid_color": "#FFEB84", "max_color": "#63BE7B",
                 })
             _w2 = {"Communication": 16, "Expected Lift": 14, "Comm Users": 14,
-                   "Projected Bal \u20ac": 20, "Proj. Accounts": 16}
+                   "Projected Bal $": 20, "Proj. Accounts": 16}
             for _ci, _col in enumerate(_sum_cols):
                 ws2.set_column(_ci, _ci, _w2.get(_col, 14))
             ws2.freeze_panes(1, 0)
@@ -1477,24 +1483,32 @@ def _render_momentum_matrix(
 
     # ── Build user-level campaign view ──────────────────────────────────────
     if campaign_type == "selectchk":
-        _ucols = ["alpha_key", "contact_flag", "start_balance", "end_balance", "nsegments"]
+        _ucols = ["alpha_key", "contact_flag", "start_balance", "end_balance",
+                  "start_accounts", "end_accounts", "nsegments"]
         _ucols = [c for c in _ucols if c in campaign_raw_df.columns]
-        _ugrp = campaign_raw_df[_ucols].groupby("alpha_key", sort=False)
-        _user_df = _ugrp.agg(
+        _ugrp   = campaign_raw_df[_ucols].groupby("alpha_key", sort=False)
+        _agg_kw = dict(
             treated=("contact_flag", "max"),
             mean_start=("start_balance", "mean"),
             mean_end=("end_balance", "mean"),
-        ).reset_index()
-        _user_df["balance_lift"] = (
+        )
+        if "start_accounts" in campaign_raw_df.columns:
+            _agg_kw["mean_start_acc"] = ("start_accounts", "mean")
+            _agg_kw["mean_end_acc"]   = ("end_accounts",   "mean")
+        _user_df = _ugrp.agg(**_agg_kw).reset_index()
+        _user_df["balance_lift"]       = (
             (_user_df["mean_end"] - _user_df["mean_start"])
             / _user_df["mean_start"].clip(lower=1.0)
         )
+        _user_df["balance_abs_change"] = _user_df["mean_end"] - _user_df["mean_start"]
+        if "mean_start_acc" in _user_df.columns:
+            _user_df["accounts_net"] = _user_df["mean_end_acc"] - _user_df["mean_start_acc"]
         _outcome_col   = "balance_lift"
         _outcome_label = "Avg balance lift (treated)"
         _treat_col     = "treated"
     else:
         _user_df = campaign_raw_df[
-            ["alpha_key", "control_flag", "bt_flag", "bt_amount", "nsegments"]
+            ["alpha_key", "control_flag", "bt_flag", "bt_transaction_amount", "nsegments"]
         ].copy()
         _user_df["treated"]     = (1 - _user_df["control_flag"]).clip(0, 1)
         _user_df["balance_lift"] = _user_df["bt_flag"]
@@ -1505,7 +1519,8 @@ def _render_momentum_matrix(
     # ── Merge with audience profile ─────────────────────────────────────────
     _aud_cols = ["alpha_key", _x_col, _y_col, "age", "gender", "tenure_years",
                  "amount_deposit_spot_balance", "n_products"]
-    _aud_cols += [c for c in ["state"] if c in aud_df.columns]
+    _aud_cols += [c for c in ["sow", "total_deposits_ixi", "state"] if c in aud_df.columns]
+    _aud_cols += [c for c in PRODUCT_COLS if c in aud_df.columns]
     _merged = _user_df.merge(
         aud_df[[c for c in _aud_cols if c in aud_df.columns]],
         on="alpha_key", how="inner",
@@ -1582,6 +1597,21 @@ def _render_momentum_matrix(
         ),
     ))
 
+    # ── Invisible scatter overlay so on_select captures heatmap clicks ─────
+    # Heatmap trace is not in Streamlit's on_select supported list; a Scatter
+    # trace IS.  These markers are fully transparent but still fire click events.
+    _click_xs = [x for x in _BUCKET_LABELS for _ in _BUCKET_LABELS]
+    _click_ys = [y for _ in _BUCKET_LABELS for y in _BUCKET_LABELS]
+    _fig_mm.add_trace(go.Scatter(
+        x=_click_xs,
+        y=_click_ys,
+        mode="markers",
+        marker=dict(size=120, opacity=0.01, color="rgba(0,0,0,0)", symbol="square"),
+        hovertemplate="<extra></extra>",
+        showlegend=False,
+        name="_click_target",
+    ))
+
     # Highlight the currently selected bucket with a white border
     _cur_x, _cur_y = st.session_state.get(_bucket_key, (None, None))
     if _cur_x in _BUCKET_LABELS and _cur_y in _BUCKET_LABELS:
@@ -1608,6 +1638,7 @@ def _render_momentum_matrix(
         font=dict(size=13),
         hoverlabel=dict(bgcolor="#1e2030", font_size=13, font_family="sans-serif"),
         dragmode=False,
+        clickmode="event+select",
     )
 
     # ── Hover pointer CSS ────────────────────────────────────────────────────
@@ -1617,7 +1648,6 @@ def _render_momentum_matrix(
     )
 
     # ── Click hint + chart ───────────────────────────────────────────────────
-    st.caption("Click any cell to drill into that customer segment →")
     _sel = st.plotly_chart(
         _fig_mm, on_select="rerun", key=f"{tab_key}_heatmap",
         use_container_width=True,
@@ -1640,36 +1670,85 @@ def _render_momentum_matrix(
         _n_treated = int((_subset[_treat_col] == 1).sum())
 
         st.divider()
-        _h_col, _clr_col = st.columns([5, 1])
-        with _h_col:
-            st.subheader(
-                f"{_y_axis}: **{_cur_y}**  ·  {_x_axis}: **{_cur_x}**"
-            )
-        with _clr_col:
-            if st.button("✕ Clear", key=f"{tab_key}_clear", use_container_width=True):
-                st.session_state[_bucket_key] = (None, None)
-                st.rerun()
-
-        _k1, _k2, _k3, _k4 = st.columns(4)
-        _k1.metric("Customers", f"{_n_total:,}")
-        _k2.metric("Treated", f"{_n_treated:,}")
+        st.markdown(
+            f"<h3 style='text-align:center;margin-bottom:0'>"
+            f"{_y_axis}: <b>{_cur_y}</b>&nbsp;·&nbsp;{_x_axis}: <b>{_cur_x}</b>"
+            f"</h3>",
+            unsafe_allow_html=True,
+        )
 
         _treated_sub = _subset[_subset[_treat_col] == 1]
+        _control_sub = _subset[_subset[_treat_col] == 0]
+        # Fallback: if no in-cell control, compare against overall campaign mean
+        _global_ctrl = _merged[_merged[_treat_col] == 0]
+        _ctrl_ref    = _control_sub if len(_control_sub) > 0 else _merged
+        _ctrl_label  = "" if len(_control_sub) > 0 else " vs avg"
+        _k1, _k2, _k3 = st.columns(3)
+        _k1.metric("Audience size", f"{_n_total:,}")
         if campaign_type == "selectchk":
-            _avg_lift = float(_treated_sub[_outcome_col].mean()) if len(_treated_sub) > 0 else float("nan")
-            _k3.metric("Avg balance lift", f"{_avg_lift:+.2%}" if not np.isnan(_avg_lift) else "—")
-            _k4.metric("Contact rate", f"{_n_treated / _n_total:.1%}" if _n_total > 0 else "—")
+            # Avg absolute balance change in $ (treated), delta vs ctrl (or campaign avg)
+            _bal_abs_t = float(_treated_sub["balance_abs_change"].mean()) if len(_treated_sub) > 0 else float("nan")
+            _bal_abs_c = float(_ctrl_ref["balance_abs_change"].mean())    if len(_ctrl_ref) > 0 else float("nan")
+            _bal_delta = (_bal_abs_t - _bal_abs_c) if not (np.isnan(_bal_abs_t) or np.isnan(_bal_abs_c)) else float("nan")
+            _k2.metric("Avg balance change",
+                       f"${_bal_abs_t:,.0f}" if not np.isnan(_bal_abs_t) else "—",
+                       delta=f"${_bal_delta:+,.0f}{_ctrl_label}" if not np.isnan(_bal_delta) else None)
+            # Net new accounts opened (end_accounts - start_accounts)
+            if "accounts_net" in _treated_sub.columns:
+                _acc_t = float(_treated_sub["accounts_net"].mean()) if len(_treated_sub) > 0 else float("nan")
+                _acc_c = float(_ctrl_ref["accounts_net"].mean())    if len(_ctrl_ref) > 0 else float("nan")
+                _acc_d = (_acc_t - _acc_c) if not (np.isnan(_acc_t) or np.isnan(_acc_c)) else float("nan")
+                _k3.metric("Accounts opened",
+                           f"{_acc_t:+.2f}" if not np.isnan(_acc_t) else "—",
+                           delta=f"{_acc_d:+.2f}{_ctrl_label}" if not np.isnan(_acc_d) else None)
+            else:
+                _k3.metric("Accounts opened", "—")
         else:
-            _bt_rate = float(_treated_sub[_outcome_col].mean()) if len(_treated_sub) > 0 else float("nan")
-            _avg_amt = float(_treated_sub["bt_amount"].mean()) if ("bt_amount" in _treated_sub.columns and len(_treated_sub) > 0) else float("nan")
-            _k3.metric("BT rate (treated)", f"{_bt_rate:.1%}" if not np.isnan(_bt_rate) else "—")
-            _k4.metric("Avg BT amount", f"${_avg_amt:,.0f}" if not np.isnan(_avg_amt) else "—")
+            # Avg BT transaction amount (converters only, treated vs control)
+            _converters   = (_treated_sub[_treated_sub["bt_flag"] == 1]
+                             if "bt_flag" in _treated_sub.columns
+                             else _treated_sub[_treated_sub["bt_transaction_amount"] > 0])
+            _converters_c = (_control_sub[_control_sub["bt_flag"] == 1]
+                             if "bt_flag" in _control_sub.columns
+                             else _control_sub[_control_sub["bt_transaction_amount"] > 0])
+            _avg_conv_amt   = (float(_converters["bt_transaction_amount"].mean())
+                               if len(_converters) > 0 and "bt_transaction_amount" in _converters.columns
+                               else float("nan"))
+            _avg_conv_amt_c = (float(_converters_c["bt_transaction_amount"].mean())
+                               if len(_converters_c) > 0 and "bt_transaction_amount" in _converters_c.columns
+                               else float("nan"))
+            _amt_delta = (_avg_conv_amt - _avg_conv_amt_c) if not (np.isnan(_avg_conv_amt) or np.isnan(_avg_conv_amt_c)) else float("nan")
+            _k2.metric("Avg transaction",
+                       f"${_avg_conv_amt:,.0f}" if not np.isnan(_avg_conv_amt) else "—",
+                       delta=f"${_amt_delta:+,.0f}" if not np.isnan(_amt_delta) else None)
+            # BT conversion rate (treated vs control)
+            _bt_rate   = float(_treated_sub[_outcome_col].mean()) if len(_treated_sub) > 0 else float("nan")
+            _bt_rate_c = float(_control_sub[_outcome_col].mean())  if len(_control_sub) > 0 else float("nan")
+            _bt_lift_d = (_bt_rate - _bt_rate_c) if not (np.isnan(_bt_rate) or np.isnan(_bt_rate_c)) else float("nan")
+            _k3.metric("Conversion rate",
+                       f"{_bt_rate:.1%}" if not np.isnan(_bt_rate) else "—",
+                       delta=f"{_bt_lift_d:+.1%}" if not np.isnan(_bt_lift_d) else None)
 
         # ── Demographics ────────────────────────────────────────────────────
         if len(_subset) > 0:
             st.markdown("#### Demographics")
-            _dm1, _dm2, _dm3 = st.columns(3)
 
+            def _kde_mm(series, nbins, line_color):
+                from scipy.stats import gaussian_kde as _gkde_mm
+                _v = series.dropna().values
+                if len(_v) < 5:
+                    return None
+                _, _edges = np.histogram(_v, bins=nbins)
+                _bw = _edges[1] - _edges[0]
+                _fn = _gkde_mm(_v)
+                _xs = np.linspace(_v.min(), _v.max(), 300)
+                _ys = _fn(_xs) * len(_v) * _bw
+                return go.Scatter(x=_xs, y=_ys, mode="lines",
+                                  line=dict(color=line_color, width=2.5),
+                                  showlegend=False, name="")
+
+            # Row 1: Age (wide) + Gender (narrow)
+            _dm1, _dm2 = st.columns([3, 2])
             with _dm1:
                 _age_bins_s  = [18, 25, 35, 45, 55, 65, 75, 120]
                 _age_lbls_s  = ["18-24", "25-34", "35-44", "45-54", "55-64", "65-74", "75+"]
@@ -1679,10 +1758,25 @@ def _render_momentum_matrix(
                 _fig_age_s = px.bar(_age_d, x="Age group", y="Customers",
                                     title="Age Distribution",
                                     color="Customers", color_continuous_scale="Blues")
-                _fig_age_s.update_layout(height=270, margin=dict(l=10, r=10, t=40, b=30),
+                _fig_age_s.add_scatter(x=_age_d["Age group"], y=_age_d["Customers"],
+                                       mode="lines+markers",
+                                       line=dict(color="#103060", width=2, shape="spline", smoothing=1.0),
+                                       marker=dict(size=5, color="#103060"), showlegend=False, name="")
+                _age_mean_s = float(_subset["age"].dropna().mean()) if _subset["age"].notna().any() else 0.0
+                _age_mean_bin_s = str(pd.cut([_age_mean_s], bins=_age_bins_s, labels=_age_lbls_s, right=False)[0])
+                _fig_age_s.add_shape(
+                    type="line", xref="x", yref="paper",
+                    x0=_age_mean_bin_s, x1=_age_mean_bin_s, y0=0, y1=1,
+                    line=dict(color="red", width=2, dash="dash"),
+                )
+                _fig_age_s.add_annotation(
+                    x=_age_mean_bin_s, yref="paper", y=1.05,
+                    text=f"Mean: {_age_mean_s:.1f}y", showarrow=False,
+                    xanchor="left", font=dict(color="red", size=11),
+                )
+                _fig_age_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
                                           coloraxis_showscale=False, showlegend=False)
                 st.plotly_chart(_fig_age_s, use_container_width=True)
-
             with _dm2:
                 _gender_d = _subset["gender"].fillna("Missing").value_counts().reset_index()
                 _gender_d.columns = ["Gender", "Count"]
@@ -1693,69 +1787,191 @@ def _render_momentum_matrix(
                     marker=dict(colors=[_gcmap_s.get(g, "#DDDDDD") for g in _gender_d["Gender"]]),
                     textinfo="percent+label",
                 ))
-                _fig_gen_s.update_layout(title="Gender", height=270,
-                                          margin=dict(l=10, r=10, t=40, b=30))
+                _fig_gen_s.update_layout(title="Gender", height=300,
+                                          margin=dict(l=20, r=20, t=50, b=30),
+                                          showlegend=False)
                 st.plotly_chart(_fig_gen_s, use_container_width=True)
 
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Row 2: Tenure + Deposit + States
+            _dm3, _dm4, _dm5 = st.columns(3)
             with _dm3:
-                _fig_ten_s = px.histogram(_subset, x="tenure_years", nbins=15,
+                _fig_ten_s = px.histogram(_subset, x="tenure_years", nbins=20,
                                            title="Tenure Distribution",
                                            labels={"tenure_years": "Tenure (years)"},
                                            color_discrete_sequence=["#4C9BE8"])
+                _k_ten_s = _kde_mm(_subset["tenure_years"], 20, "#1a3a6b")
+                if _k_ten_s:
+                    _fig_ten_s.add_trace(_k_ten_s)
                 _ten_med_s = float(_subset["tenure_years"].dropna().median()) if _subset["tenure_years"].notna().any() else 0.0
                 _fig_ten_s.add_vline(x=_ten_med_s, line=dict(color="red", width=2, dash="dash"),
-                                     annotation_text=f"Med: {_ten_med_s:.1f}y",
+                                     annotation_text=f"Median: {_ten_med_s:.1f}y",
                                      annotation_position="top right",
                                      annotation_font=dict(color="red", size=11))
-                _fig_ten_s.update_layout(height=270, margin=dict(l=10, r=10, t=40, b=30))
+                _fig_ten_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
                 st.plotly_chart(_fig_ten_s, use_container_width=True)
-
-            _dm4, _dm5, _dm6 = st.columns(3)
-
             with _dm4:
                 _dep_p99_s = float(_subset["amount_deposit_spot_balance"].dropna().quantile(0.99) or 1.0)
                 _dep_sub   = _subset[_subset["amount_deposit_spot_balance"] <= _dep_p99_s]
-                _fig_dep_s = px.histogram(_dep_sub, x="amount_deposit_spot_balance", nbins=15,
+                _fig_dep_s = px.histogram(_dep_sub, x="amount_deposit_spot_balance", nbins=25,
                                            title="Deposit Balance",
                                            labels={"amount_deposit_spot_balance": "Balance ($)"},
                                            color_discrete_sequence=["#F4A261"])
+                _k_dep_s = _kde_mm(_subset["amount_deposit_spot_balance"], 25, "#7a3100")
+                if _k_dep_s:
+                    _fig_dep_s.add_trace(_k_dep_s)
                 _dep_med_s = float(_subset["amount_deposit_spot_balance"].dropna().median()) if _subset["amount_deposit_spot_balance"].notna().any() else 0.0
                 _fig_dep_s.add_vline(x=_dep_med_s, line=dict(color="red", width=2, dash="dash"),
-                                     annotation_text=f"Med: ${_dep_med_s:,.0f}",
+                                     annotation_text=f"Median: ${_dep_med_s:,.0f}",
                                      annotation_position="top right",
                                      annotation_font=dict(color="red", size=11))
                 _fig_dep_s.update_xaxes(range=[0, _dep_p99_s])
-                _fig_dep_s.update_layout(height=270, margin=dict(l=10, r=10, t=40, b=30))
+                _fig_dep_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30))
                 st.plotly_chart(_fig_dep_s, use_container_width=True)
-
             with _dm5:
+                if "state" in _subset.columns:
+                    _state_s = _subset["state"].value_counts().head(10).reset_index()
+                    _state_s.columns = ["State", "Customers"]
+                    _fig_states_s = px.bar(_state_s, x="Customers", y="State", orientation="h",
+                                           title="Top 10 States",
+                                           color="Customers", color_continuous_scale="Teal")
+                    _fig_states_s.update_layout(height=300, margin=dict(l=20, r=20, t=50, b=30),
+                                                coloraxis_showscale=False,
+                                                yaxis=dict(categoryorder="total ascending"))
+                    st.plotly_chart(_fig_states_s, use_container_width=True)
+
+            st.markdown("<br>", unsafe_allow_html=True)
+
+            # Row 3: Product ownership rates + # Products held
+            _dm6, _dm7 = st.columns(2)
+            with _dm6:
+                _prod_cols_s = [c for c in PRODUCT_COLS if c in _subset.columns]
+                if _prod_cols_s:
+                    _prod_rates_s = (_subset[_prod_cols_s].mean() * 100).sort_values(ascending=True).reset_index()
+                    _prod_rates_s.columns = ["Product", "% with product"]
+                    _fig_prods_s = px.bar(_prod_rates_s, x="% with product", y="Product", orientation="h",
+                                          title="Product Ownership Rates", color="% with product",
+                                          color_continuous_scale="Purpor",
+                                          text=_prod_rates_s["% with product"].map(lambda v: f"{v:.1f}%"))
+                    _fig_prods_s.update_traces(textposition="outside")
+                    _fig_prods_s.update_layout(height=340, margin=dict(l=20, r=80, t=40, b=20),
+                                               coloraxis_showscale=False,
+                                               xaxis=dict(ticksuffix="%", range=[0, 100]))
+                    st.plotly_chart(_fig_prods_s, use_container_width=True)
+            with _dm7:
                 _nprod_d = _subset["n_products"].value_counts().sort_index().reset_index()
                 _nprod_d.columns = ["Products", "Customers"]
                 _fig_np_s = px.bar(_nprod_d, x="Products", y="Customers",
                                     title="# Products Held",
                                     color="Customers", color_continuous_scale="YlOrRd")
-                _fig_np_s.update_layout(height=270, margin=dict(l=10, r=10, t=40, b=30),
+                _fig_np_s.add_scatter(x=_nprod_d["Products"], y=_nprod_d["Customers"],
+                                      mode="lines+markers",
+                                      line=dict(color="#5a0000", width=2, shape="spline", smoothing=0.8),
+                                      marker=dict(size=6, color="#5a0000"), showlegend=False, name="")
+                _nprod_mean_s = float(_subset["n_products"].dropna().mean()) if _subset["n_products"].notna().any() else 0.0
+                _fig_np_s.add_vline(x=_nprod_mean_s, line=dict(color="red", width=2, dash="dash"),
+                                    annotation_text=f"Mean: {_nprod_mean_s:.1f}",
+                                    annotation_position="top right",
+                                    annotation_font=dict(color="red", size=11))
+                _fig_np_s.update_layout(height=340, margin=dict(l=20, r=20, t=50, b=30),
                                          coloraxis_showscale=False)
                 st.plotly_chart(_fig_np_s, use_container_width=True)
 
-            with _dm6:
-                _subset_keys = set(_subset["alpha_key"])
-                _seg_sub     = campaign_raw_df[campaign_raw_df["alpha_key"].isin(_subset_keys)]
-                _seg_series  = _seg_sub["nsegments"].apply(_try_parse_listlike).explode().dropna()
-                _seg_series  = _seg_series[_seg_series.astype(str).str.strip() != ""]
-                _seg_cnts    = _seg_series.value_counts().head(10).reset_index()
-                _seg_cnts.columns = ["Segment", "Customers"]
-                _seg_cnts["Label"] = _seg_cnts["Segment"].apply(
-                    lambda s: (SEGMENT_LABELS.get(str(s), str(s)) or str(s))[:22]
-                )
-                _fig_segs_s = px.bar(_seg_cnts, x="Customers", y="Label", orientation="h",
-                                      title="Top 10 Segments",
-                                      labels={"Label": "Segment"},
-                                      color="Customers", color_continuous_scale="Teal")
-                _fig_segs_s.update_layout(height=270, margin=dict(l=10, r=10, t=40, b=30),
-                                           coloraxis_showscale=False,
-                                           yaxis=dict(categoryorder="total ascending"))
-                st.plotly_chart(_fig_segs_s, use_container_width=True)
+            # Row 4: Deposits vs IXI scatter with percentile contours (full width)
+            if "total_deposits_ixi" in _subset.columns and "sow" in _subset.columns:
+                st.markdown("<br>", unsafe_allow_html=True)
+                _sow_df_s = _subset[["amount_deposit_spot_balance", "total_deposits_ixi", "sow"]].dropna()
+                if len(_sow_df_s) > 0:
+                    _sow_df_s = _sow_df_s[
+                        (_sow_df_s["amount_deposit_spot_balance"] <= 200_000) &
+                        (_sow_df_s["total_deposits_ixi"] <= 1_500_000)
+                    ]
+                    _sow_mean_s = float(_sow_df_s["sow"].mean()) if len(_sow_df_s) > 0 else float("nan")
+                    _fig_sow_s = px.scatter(
+                        _sow_df_s, x="amount_deposit_spot_balance", y="total_deposits_ixi",
+                        color="sow", color_continuous_scale="RdYlGn", range_color=[0, 1],
+                        title=f"Deposits VS IXI (SoW {_sow_mean_s:.1%})" if not np.isnan(_sow_mean_s) else "Deposits VS IXI (SoW)",
+                        labels={"amount_deposit_spot_balance": "Deposit ($)",
+                                "total_deposits_ixi": "IXI ($)", "sow": "SoW"},
+                        opacity=0.5,
+                    )
+                    _fig_sow_s.update_xaxes(range=[0, 200_000])
+                    _fig_sow_s.update_yaxes(range=[0, 1_500_000])
+                    if len(_sow_df_s) >= 20:
+                        import matplotlib
+                        matplotlib.use('Agg')
+                        import matplotlib.pyplot as _plt_s
+                        from scipy.stats import gaussian_kde as _gkde_sow_s
+                        from scipy.ndimage import gaussian_filter as _gf_s
+                        _xs_s = _sow_df_s["amount_deposit_spot_balance"].values
+                        _ys_s = _sow_df_s["total_deposits_ixi"].values
+                        try:
+                            _kde_sow_s = _gkde_sow_s(np.vstack([_xs_s, _ys_s]), bw_method=0.3)
+                            _xi_s = np.linspace(_xs_s.min(), _xs_s.max(), 200)
+                            _yi_s = np.linspace(_ys_s.min(), _ys_s.max(), 200)
+                            _XX_s, _YY_s = np.meshgrid(_xi_s, _yi_s)
+                            _ZZ_s = _kde_sow_s(np.vstack([_XX_s.ravel(), _YY_s.ravel()])).reshape(_XX_s.shape)
+                            _ZZ_s = _gf_s(_ZZ_s, sigma=3)
+                            _z_pts_s = _kde_sow_s(np.vstack([_xs_s, _ys_s]))
+                            _sow_vals_s = _sow_df_s["sow"].values
+                            for _plbl_s, _clr_s in [
+                                (90, "#2166ac"),
+                                (50, "#1a9850"),
+                                (25, "#f4a11d"),
+                                (10, "#c0392b"),
+                            ]:
+                                _lvl_s = float(np.percentile(_z_pts_s, 100 - _plbl_s))
+                                if _lvl_s <= 0:
+                                    continue
+                                _mask_s = _z_pts_s >= _lvl_s
+                                _sow_grp_s = float(np.mean(_sow_vals_s[_mask_s])) if _mask_s.any() else float('nan')
+                                _sow_lbl_s = f" (SoW {_sow_grp_s:.1%})" if not np.isnan(_sow_grp_s) else ""
+                                _fig_sow_s.add_trace(go.Scatter(
+                                    x=[None], y=[None], mode='lines',
+                                    line=dict(color=_clr_s, width=2.5),
+                                    name=f'{_plbl_s}th pct{_sow_lbl_s}',
+                                    legendgroup=f'pct{_plbl_s}_s', showlegend=True,
+                                ))
+                                _mfig_s, _max_s = _plt_s.subplots()
+                                _cs_s = _max_s.contour(_XX_s, _YY_s, _ZZ_s, levels=[_lvl_s])
+                                _plt_s.close(_mfig_s)
+                                for _seg_s in _cs_s.get_paths():
+                                    _verts_s = _seg_s.vertices
+                                    if len(_verts_s) < 5:
+                                        continue
+                                    _myi_s = int(np.argmin(_verts_s[:, 1]))
+                                    _mxi_s = int(np.argmin(_verts_s[:, 0]))
+                                    _n_s   = len(_verts_s)
+                                    _rol_s = np.roll(_verts_s, -_myi_s, axis=0)
+                                    _nmx_s = (_mxi_s - _myi_s) % _n_s
+                                    _arc_a_s = _rol_s[:_nmx_s + 1]
+                                    _arc_b_s = _rol_s[_nmx_s:]
+                                    if _arc_a_s.shape[0] < 3 or _arc_b_s.shape[0] < 3:
+                                        _opn_s = _rol_s
+                                    elif np.mean(_arc_a_s[:, 0] + _arc_a_s[:, 1]) >= np.mean(_arc_b_s[:, 0] + _arc_b_s[:, 1]):
+                                        _opn_s = _arc_a_s
+                                    else:
+                                        _opn_s = _arc_b_s
+                                    _pts_s = np.vstack([
+                                        [max(float(_opn_s[0, 0]), 0), 0],
+                                        _opn_s,
+                                        [0, max(float(_opn_s[-1, 1]), 0)],
+                                    ])
+                                    _svg_s = "M " + " L ".join(f"{float(_px):.4f},{float(_py):.4f}" for _px, _py in _pts_s)
+                                    _fig_sow_s.add_shape(
+                                        type='path', path=_svg_s,
+                                        xref='x', yref='y',
+                                        line=dict(color=_clr_s, width=2.5),
+                                        fillcolor='rgba(0,0,0,0)',
+                                        layer='above',
+                                    )
+                        except Exception:
+                            pass
+                    _fig_sow_s.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
+                                             legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)',
+                                                         bordercolor='#aaa', borderwidth=1))
+                    st.plotly_chart(_fig_sow_s, use_container_width=True)
 
 
 # ══════════════════════════════════════════════════════════
@@ -1932,13 +2148,12 @@ if active_campaign == "SELECTCHK":
     with tab_table:
         # ── Metric toggle ─────────────────────────────────────────────────────────
         _metric_opts = ["Balance only", "Balance & Accounts", "Accounts only"]
-        _show_metric_radio = st.radio(
+        _show_metric_radio = st.segmented_control(
             "Show columns",
             _metric_opts,
-            horizontal=True,
+            default=_metric_opts[0],
             key="show_metric_radio",
-            label_visibility="visible",
-        )
+        ) or _metric_opts[0]
         _show_metric_map = {"Balance & Accounts": "both", "Balance only": "balance", "Accounts only": "accounts"}
         _show_metric_val = _show_metric_map[_show_metric_radio]
 
@@ -2008,6 +2223,11 @@ if active_campaign == "SELECTCHK":
 
             # ── Downloads ────────────────────────────────────────────────────
             _, _sdl_col, _ = st.columns([2, 3, 2])
+            st.markdown(
+                '<style>div:has(>#_sdl_anchor)+div[data-testid="stHorizontalBlock"]'
+                '{margin-top:-16px!important}</style><div id="_sdl_anchor"></div>',
+                unsafe_allow_html=True,
+            )
             _sdl_col.download_button(
                 label="Download Excel",
                 data=build_excel(tbl, ordered_comms),
@@ -2098,10 +2318,10 @@ if active_campaign == "SELECTCHK":
 
             _ra_c1, _ra_c2, _ra_c3, _ra_c4 = st.columns([2, 2, 2, 1])
             with _ra_c1:
-                ra_metric = st.radio(
+                ra_metric = st.segmented_control(
                     "Optimise for", ["Balance lift", "Accounts lift"],
-                    horizontal=True, key="ra_metric",
-                )
+                    default="Balance lift", key="ra_metric",
+                ) or "Balance lift"
             with _ra_c2:
                 ra_comm = st.selectbox(
                     "Communication", ordered_comms, key="ra_comm",
@@ -2507,7 +2727,8 @@ if active_campaign == "SELECTCHK":
                     marker=dict(colors=[_g_cmap2.get(g, "#DDDDDD") for g in _gender_counts2["Gender"]]),
                     textinfo="percent+label"))
                 _fig_gender2.update_layout(title=dict(text="Gender"), height=300,
-                                           margin=dict(l=20, r=20, t=50, b=30))
+                                           margin=dict(l=20, r=20, t=50, b=30),
+                                           showlegend=False)
                 st.plotly_chart(_fig_gender2, width='stretch')
 
             st.markdown("<br>", unsafe_allow_html=True)
@@ -2711,9 +2932,9 @@ if active_campaign == "SELECTCHK":
     **Per-segment breakdown table**  
     The table below shows per-segment figures (naïve group means) for reference. These are not used in the headline KPI — they are informational only.
 
-    **Projected absolute € increase**  
+    **Projected absolute $ increase**  
     Formula: `unique customers × mean incremental balance change (treated − control baseline)`  
-    The incremental change is the direct observed average € change per customer in the treated cohort minus the control cohort baseline — no pct × avg-balance reconstruction.  
+    The incremental change is the direct observed average $ change per customer in the treated cohort minus the control cohort baseline — no pct × avg-balance reconstruction.  
     Note: this is an *expected* estimate based on historical data — actual results will vary.
 
     **Projected account openings**  
@@ -2860,7 +3081,7 @@ if active_campaign == "SELECTCHK":
                         "Treatment Avg":   w_raw,
                         "Total N":         total_n,
                         "Comm Users":      _comm_n_u,
-                        "Projected Bal \u20ac": proj_eur,
+                        "Projected Bal $": proj_eur,
                         "Proj. Accounts":  proj_accts,
                         "_rank":           _rank(comm),
                     })
@@ -2878,7 +3099,7 @@ if active_campaign == "SELECTCHK":
                     help="Unique people (alpha_key) who were contacted and appear in at least one of the selected segments.",
                 )
                 with _tot_c2:
-                    st.radio("Metric", ["Balance % lift", "Accounts % lift"], key="sim_metric", horizontal=True)
+                    st.segmented_control("Metric", ["Balance % lift", "Accounts % lift"], default=sim_metric, key="sim_metric")
                 _lift_suffix = "_lift_bal" if sim_metric == "Balance % lift" else "_lift_acct"
                 _raw_suffix  = "_bal"      if sim_metric == "Balance % lift" else "_acct"
                 _y_label     = "Expected Balance Lift %" if sim_metric == "Balance % lift" else "Expected Accounts Lift %"
@@ -2906,11 +3127,11 @@ if active_campaign == "SELECTCHK":
                     st.markdown("#### Projected absolute balance increase")
                     proj_b_cols = st.columns(len(sim_summary))
                     for i, row in sim_summary.iterrows():
-                        pv = row["Projected Bal \u20ac"]
+                        pv = row["Projected Bal $"]
                         proj_b_cols[i].metric(
                             row["Communication"],
-                            f"\u20ac{pv:,.0f}" if pd.notna(pv) else "—",
-                            help="Formula: unique customers × mean incremental balance change (treated − control baseline). Direct € observation, not pct × avg balance.",
+                            f"${pv:,.0f}" if pd.notna(pv) else "—",
+                            help="Formula: unique customers × mean incremental balance change (treated − control baseline). Direct $ observation, not pct × avg balance.",
                         )
                 else:
                     st.markdown("#### Projected account openings")
@@ -3124,8 +3345,7 @@ if active_campaign == "SELECTCHK":
                             _fig_gender.update_layout(
                                 title=dict(text="Gender"),
                                 height=300, margin=dict(l=20, r=20, t=50, b=30),
-                                legend=dict(orientation="v", yanchor="middle", y=0.5),
-                                showlegend=True,
+                                showlegend=False,
                             )
                             st.plotly_chart(_fig_gender, width='stretch')
 
@@ -3363,7 +3583,7 @@ if active_campaign == "SELECTCHK":
 
         with st.expander("Methodology Notes", expanded=True):
             if bal_baseline_min is not None:
-                st.info(f"**Low-balance filter active**: segments with avg starting balance < €{bal_baseline_min:,.0f} excluded from ranking.")
+                st.info(f"**Low-balance filter active**: segments with avg starting balance < ${bal_baseline_min:,.0f} excluded from ranking.")
 
             st.markdown("**Control group coverage per communication:**")
             ctrl_cov = (
@@ -3444,7 +3664,7 @@ elif active_campaign == "CC_BT":
         st.error("CC_BT_campaign.csv not found.")
         st.stop()
 
-    _bt_required = ["alpha_key", "control_flag", "bt_amount", "bt_flag", "nsegments"]
+    _bt_required = ["alpha_key", "control_flag", "bt_transaction_amount", "nsegments"]
     _bt_missing = [c for c in _bt_required if c not in _bt_raw.columns]
     if _bt_missing:
         st.error("CC_BT_campaign.csv is missing columns: " + ", ".join(_bt_missing))
@@ -3458,11 +3678,11 @@ elif active_campaign == "CC_BT":
         _seg_lookup_widget(_bt_all_seg_ids, SEGMENT_LABELS, SEGMENT_DESCRIPTIONS)
 
         # ── Date range (shown only when bt_date column exists) ────────────────
-        _bt_has_date = "bt_date" in _bt_raw.columns
+        _bt_has_date = "bt_transaction_date" in _bt_raw.columns
         _bt_date_from = _bt_date_to = None
         if _bt_has_date:
             st.subheader("Date range")
-            _bt_dates = pd.to_datetime(_bt_raw["bt_date"], errors="coerce").dropna()
+            _bt_dates = pd.to_datetime(_bt_raw["bt_transaction_date"], errors="coerce").dropna()
             _bt_d_min = _bt_dates.min().date()
             _bt_d_max = _bt_dates.max().date()
             _bt_dcol1, _bt_dcol2 = st.columns(2)
@@ -3572,13 +3792,13 @@ elif active_campaign == "CC_BT":
         if _bt_tbl.empty:
             st.warning("No segments meet the minimum N threshold. Lower the filter in the sidebar.")
         else:
-            # ── Metric / display options ──────────────────────────────────────
-            _bt_mc1, _bt_mc2, _ = st.columns([2, 2, 3])
-            _bt_metric = _bt_mc1.radio(
+            # ── Metric toggle (above) then display options (below) ────────────
+            _bt_metric = st.segmented_control(
                 "Metric", ["BT Conversion Lift", "BT Amount Lift"],
-                horizontal=True, key="bt_metric_radio",
-            )
-            _bt_show_n = _bt_mc2.checkbox("Show N", value=False, key="bt_show_n")
+                default="BT Conversion Lift", key="bt_metric_radio",
+            ) or "BT Conversion Lift"
+            _bt_show_n_col, _ = st.columns([1, 4])
+            _bt_show_n = _bt_show_n_col.checkbox("Show N", value=False, key="bt_show_n")
 
             if _bt_metric == "BT Conversion Lift":
                 _val_col, _ci_col  = "conv_lift", "conv_lift_ci"
@@ -3634,6 +3854,11 @@ elif active_campaign == "CC_BT":
             # ── Downloads (right below table, before chart) ───────────────────
             _bt_metric_key = "conv" if _bt_metric == "BT Conversion Lift" else "amt"
             _, _bt_btn_col, _ = st.columns([2, 3, 2])
+            st.markdown(
+                '<style>div:has(>#_bt_dl_anchor)+div[data-testid="stHorizontalBlock"]'
+                '{margin-top:-16px!important}</style><div id="_bt_dl_anchor"></div>',
+                unsafe_allow_html=True,
+            )
             _bt_btn_col.download_button(
                 label="Download Excel",
                 data=build_cc_bt_excel(_bt_tbl, _bt_metric_key),
@@ -3650,8 +3875,8 @@ elif active_campaign == "CC_BT":
                        "Use these as ready-made targeting lists — no manual segment selection needed.")
             _bt_ra_c1, _bt_ra_c2, _bt_ra_c3 = st.columns([3, 3, 1])
             with _bt_ra_c1:
-                _bt_ra_metric = st.radio("Optimise for", ["Conv Lift", "Amt Lift"],
-                                         horizontal=True, key="bt_ra_metric")
+                _bt_ra_metric = st.segmented_control("Optimise for", ["Conv Lift", "Amt Lift"],
+                                                     default="Conv Lift", key="bt_ra_metric") or "Conv Lift"
             with _bt_ra_c2:
                 _bt_ra_all_opts = sorted(_bt_tbl.index.astype(str).tolist())
                 _bt_ra_and_segs = st.multiselect(
@@ -3717,8 +3942,8 @@ elif active_campaign == "CC_BT":
                     _bt_tv  = _bt_tc["bt_flag"].mean() if not _bt_tc.empty else np.nan
                     _bt_cv_ = _bt_cc["bt_flag"].mean() if not _bt_cc.empty else np.nan
                 else:
-                    _bt_tv  = _bt_tc[_bt_tc["bt_flag"] == 1]["bt_amount"].mean() if not _bt_tc.empty else np.nan
-                    _bt_cv_ = _bt_cc[_bt_cc["bt_flag"] == 1]["bt_amount"].mean() if not _bt_cc.empty else np.nan
+                    _bt_tv  = _bt_tc[_bt_tc["bt_flag"] == 1]["bt_transaction_amount"].mean() if not _bt_tc.empty else np.nan
+                    _bt_cv_ = _bt_cc[_bt_cc["bt_flag"] == 1]["bt_transaction_amount"].mean() if not _bt_cc.empty else np.nan
                 _bt_w_lift = float(_bt_tv - _bt_cv_) if (pd.notna(_bt_tv) and pd.notna(_bt_cv_)) else np.nan
                 _bt_rm1, _bt_rm2 = st.columns(2)
                 _bt_rm1.metric("Recommended audience", f"{_bt_ra_users:,} customers")
@@ -3758,6 +3983,11 @@ elif active_campaign == "CC_BT":
                 _bt_ra_placeholder.empty()
                 st.info(f"No {_bt_ra_label} data available.")
             if _bt_ra_shown_segs:
+                st.markdown(
+                    '<style>div:has(>#_bt_ra_send_anchor)+div[data-testid="element-container"]'
+                    '{margin-top:-28px!important}</style><div id="_bt_ra_send_anchor"></div>',
+                    unsafe_allow_html=True,
+                )
                 _, _bt_ra_btn_col, _ = st.columns([1, 2, 1])
                 if _bt_ra_btn_col.button("Send to Audience Simulator", key="bt_ra_send_sim", use_container_width=True):
                     st.session_state["bt_sim_segs"]          = _bt_ra_shown_segs
@@ -3823,7 +4053,8 @@ elif active_campaign == "CC_BT":
                     marker=dict(colors=[_g_cmap2.get(g, "#DDDDDD") for g in _gender_counts2["Gender"]]),
                     textinfo="percent+label"))
                 _fig_gender2.update_layout(title=dict(text="Gender"), height=300,
-                                           margin=dict(l=20, r=20, t=50, b=30))
+                                           margin=dict(l=20, r=20, t=50, b=30),
+                                           showlegend=False)
                 st.plotly_chart(_fig_gender2, width='stretch')
             st.markdown("<br>", unsafe_allow_html=True)
             _d3, _d4, _d5 = st.columns(3)
@@ -3901,6 +4132,98 @@ elif active_campaign == "CC_BT":
                                         coloraxis_showscale=False)
                 st.plotly_chart(_fig_np2, width='stretch')
 
+            st.markdown('<br>', unsafe_allow_html=True)
+
+            # Row 4: Deposits vs IXI scatter with percentile contours (full width)
+            _sow_df_bt = _d[['amount_deposit_spot_balance', 'total_deposits_ixi', 'sow']].dropna() if 'total_deposits_ixi' in _d.columns else None
+            if _sow_df_bt is not None and len(_sow_df_bt) > 0:
+                _sow_df_bt = _sow_df_bt[
+                    (_sow_df_bt['amount_deposit_spot_balance'] <= 200_000) &
+                    (_sow_df_bt['total_deposits_ixi'] <= 1_500_000)
+                ]
+                _sow_mean_bt = float(_sow_df_bt['sow'].mean()) if len(_sow_df_bt) > 0 else float('nan')
+                _fig_sow_bt = px.scatter(
+                    _sow_df_bt, x='amount_deposit_spot_balance', y='total_deposits_ixi',
+                    color='sow', color_continuous_scale='RdYlGn', range_color=[0, 1],
+                    title=f"Deposits VS IXI (SoW {_sow_mean_bt:.1%})" if not np.isnan(_sow_mean_bt) else 'Deposits VS IXI (SoW)',
+                    labels={'amount_deposit_spot_balance': 'Deposit ($)',
+                            'total_deposits_ixi': 'IXI ($)', 'sow': 'SoW'},
+                    opacity=0.5,
+                )
+                _fig_sow_bt.update_xaxes(range=[0, 200_000])
+                _fig_sow_bt.update_yaxes(range=[0, 1_500_000])
+                if len(_sow_df_bt) >= 20:
+                    import matplotlib
+                    matplotlib.use('Agg')
+                    import matplotlib.pyplot as _plt_bt
+                    from scipy.stats import gaussian_kde as _gkde_sow_bt
+                    from scipy.ndimage import gaussian_filter as _gf_bt
+                    _xs_bt = _sow_df_bt['amount_deposit_spot_balance'].values
+                    _ys_bt = _sow_df_bt['total_deposits_ixi'].values
+                    try:
+                        _kde_bt = _gkde_sow_bt(np.vstack([_xs_bt, _ys_bt]), bw_method=0.3)
+                        _xi_bt = np.linspace(_xs_bt.min(), _xs_bt.max(), 200)
+                        _yi_bt = np.linspace(_ys_bt.min(), _ys_bt.max(), 200)
+                        _XX_bt, _YY_bt = np.meshgrid(_xi_bt, _yi_bt)
+                        _ZZ_bt = _kde_bt(np.vstack([_XX_bt.ravel(), _YY_bt.ravel()])).reshape(_XX_bt.shape)
+                        _ZZ_bt = _gf_bt(_ZZ_bt, sigma=3)
+                        _z_pts_bt = _kde_bt(np.vstack([_xs_bt, _ys_bt]))
+                        _sow_vals_bt = _sow_df_bt['sow'].values
+                        for _plbl_bt, _clr_bt in [
+                            (90, '#2166ac'), (50, '#1a9850'), (25, '#f4a11d'), (10, '#c0392b'),
+                        ]:
+                            _lvl_bt = float(np.percentile(_z_pts_bt, 100 - _plbl_bt))
+                            if _lvl_bt <= 0:
+                                continue
+                            _mask_bt = _z_pts_bt >= _lvl_bt
+                            _sow_grp_bt = float(np.mean(_sow_vals_bt[_mask_bt])) if _mask_bt.any() else float('nan')
+                            _sow_lbl_bt = f" (SoW {_sow_grp_bt:.1%})" if not np.isnan(_sow_grp_bt) else ''
+                            _fig_sow_bt.add_trace(go.Scatter(
+                                x=[None], y=[None], mode='lines',
+                                line=dict(color=_clr_bt, width=2.5),
+                                name=f'{_plbl_bt}th pct{_sow_lbl_bt}',
+                                legendgroup=f'pct{_plbl_bt}_bt', showlegend=True,
+                            ))
+                            _mfig_bt, _max_bt = _plt_bt.subplots()
+                            _cs_bt = _max_bt.contour(_XX_bt, _YY_bt, _ZZ_bt, levels=[_lvl_bt])
+                            _plt_bt.close(_mfig_bt)
+                            for _seg_bt in _cs_bt.get_paths():
+                                _verts_bt = _seg_bt.vertices
+                                if len(_verts_bt) < 5:
+                                    continue
+                                _myi_bt = int(np.argmin(_verts_bt[:, 1]))
+                                _mxi_bt = int(np.argmin(_verts_bt[:, 0]))
+                                _n_bt   = len(_verts_bt)
+                                _rol_bt = np.roll(_verts_bt, -_myi_bt, axis=0)
+                                _nmx_bt = (_mxi_bt - _myi_bt) % _n_bt
+                                _arc_a_bt = _rol_bt[:_nmx_bt + 1]
+                                _arc_b_bt = _rol_bt[_nmx_bt:]
+                                if _arc_a_bt.shape[0] < 3 or _arc_b_bt.shape[0] < 3:
+                                    _opn_bt = _rol_bt
+                                elif np.mean(_arc_a_bt[:, 0] + _arc_a_bt[:, 1]) >= np.mean(_arc_b_bt[:, 0] + _arc_b_bt[:, 1]):
+                                    _opn_bt = _arc_a_bt
+                                else:
+                                    _opn_bt = _arc_b_bt
+                                _pts_bt = np.vstack([
+                                    [max(float(_opn_bt[0, 0]), 0), 0],
+                                    _opn_bt,
+                                    [0, max(float(_opn_bt[-1, 1]), 0)],
+                                ])
+                                _svg_bt = 'M ' + ' L '.join(f'{float(px):.4f},{float(py):.4f}' for px, py in _pts_bt)
+                                _fig_sow_bt.add_shape(
+                                    type='path', path=_svg_bt,
+                                    xref='x', yref='y',
+                                    line=dict(color=_clr_bt, width=2.5),
+                                    fillcolor='rgba(0,0,0,0)',
+                                    layer='above',
+                                )
+                    except Exception:
+                        pass
+                _fig_sow_bt.update_layout(height=380, margin=dict(l=20, r=20, t=50, b=30),
+                                          legend=dict(x=0.01, y=0.99, bgcolor='rgba(255,255,255,0.8)',
+                                                      bordercolor='#aaa', borderwidth=1))
+                st.plotly_chart(_fig_sow_bt, width='stretch')
+
     # ════ AUDIENCE SIMULATOR TAB ════════════════════════════════════════════════
     with _bt_tab_sim:
         st.subheader("Audience Performance Simulator")
@@ -3954,8 +4277,8 @@ elif active_campaign == "CC_BT":
                 _excl_note_sim = f" ({len(_bt_compute_excl)} excluded)" if _bt_compute_excl else ""
                 _bt_tot_c1.metric(f"Total unique customers (all selected segments){_excl_note_sim}",
                                   f"{_bt_total_users_sim:,}")
-                _bt_sim_metric = _bt_tot_c2.radio("Metric", ["Conv Lift", "Amt Lift"],
-                                                  horizontal=True, key="bt_sim_metric")
+                _bt_sim_metric = _bt_tot_c2.segmented_control("Metric", ["Conv Lift", "Amt Lift"],
+                                                              default="Conv Lift", key="bt_sim_metric") or "Conv Lift"
                 _bt_sim_treated = (_bt_df[(_bt_df["control_flag"] == 0) &
                                           (_bt_df["nsegment"].astype(str).isin(_bt_compute_segs))]
                                    .drop_duplicates("alpha_key"))
@@ -3968,7 +4291,7 @@ elif active_campaign == "CC_BT":
                 _bt_rate_c = _bt_sim_control["bt_flag"].mean() if not _bt_sim_control.empty else np.nan
                 _bt_lift_s = float(_bt_rate_t - _bt_rate_c) if (pd.notna(_bt_rate_t) and pd.notna(_bt_rate_c)) else np.nan
                 _bt_conv_t = _bt_sim_treated[_bt_sim_treated["bt_flag"] == 1]
-                _bt_avg_amt_s  = _bt_conv_t["bt_amount"].mean() if not _bt_conv_t.empty else 0.0
+                _bt_avg_amt_s  = _bt_conv_t["bt_transaction_amount"].mean() if not _bt_conv_t.empty else 0.0
                 _bt_incr_conv_s = int(len(_bt_sim_treated) * max(0.0, _bt_lift_s)) if pd.notna(_bt_lift_s) else 0
                 _bt_incr_amt_s  = _bt_incr_conv_s * _bt_avg_amt_s
                 st.markdown("#### Expected lift across selected segments")
@@ -4119,10 +4442,10 @@ elif active_campaign == "CC_BT":
         st.divider()
 
         with st.expander("Data Quality", expanded=True):
-            _nan_bt  = _bt_raw["bt_flag"].isna().mean()
-            _nan_amt = _bt_raw["bt_amount"].isna().mean()
+            _nan_bt  = _bt_raw["bt_flag"].isna().mean() if "bt_flag" in _bt_raw.columns else 0.0
+            _nan_amt = _bt_raw["bt_transaction_amount"].isna().mean()
             _dup_bt  = _bt_raw.duplicated(subset=["alpha_key"]).mean()
-            _bt_conv = (_bt_raw["bt_flag"] == 1).mean()
+            _bt_conv = (_bt_raw["bt_flag"] == 1).mean() if "bt_flag" in _bt_raw.columns else (_bt_raw["bt_transaction_amount"] > 0).mean()
             _ddq1, _ddq2, _ddq3, _ddq4 = st.columns(4)
             _ddq1.metric("BT flag missing",     f"{_nan_bt:.1%}")
             _ddq2.metric("BT amount missing",   f"{_nan_amt:.1%}")
