@@ -1788,9 +1788,6 @@ def _render_momentum_matrix(
         # ── Demographics ────────────────────────────────────────────────────
         if len(_subset) > 0:
             st.markdown("#### Demographics")
-            with st.expander("🔍 Debug: available columns in this cell", expanded=False):
-                st.write(list(_subset.columns))
-                st.write(f"Rows: {len(_subset)}")
             try:
                 def _kde_mm(series, nbins, line_color):
                     from scipy.stats import gaussian_kde as _gkde_mm
@@ -2753,7 +2750,7 @@ if active_campaign == "SELECTCHK":
             _schk_toggle_opts = ["Current demography"]
             if _selectchk_demo is not None:
                 _schk_toggle_opts.append("Campaign demography")
-            _schk_demo_choice = st.radio("View", _schk_toggle_opts, horizontal=True, key="schk_demo_toggle", label_visibility="collapsed")
+            _schk_demo_choice = st.segmented_control("View", _schk_toggle_opts, default=_schk_toggle_opts[0], key="schk_demo_toggle", label_visibility="collapsed")
             _schk_demo_src = _aud_df if _schk_demo_choice == "Current demography" else _selectchk_demo
             _demo_lbl = "current population" if _schk_demo_choice == "Current demography" else "SELECTCHK campaign universe"
         if _schk_demo_src is not None and len(_schk_demo_src) > 0:
@@ -4130,7 +4127,7 @@ elif active_campaign == "CC_BT":
             _bt_toggle_opts = ["Current demography"]
             if _btcc_demo is not None:
                 _bt_toggle_opts.append("Campaign demography")
-            _bt_demo_choice = st.radio("View", _bt_toggle_opts, horizontal=True, key="btcc_demo_toggle", label_visibility="collapsed")
+            _bt_demo_choice = st.segmented_control("View", _bt_toggle_opts, default=_bt_toggle_opts[0], key="btcc_demo_toggle", label_visibility="collapsed")
             _bt_demo_src = _aud_df if _bt_demo_choice == "Current demography" else _btcc_demo
             _bt_demo_lbl = "current population" if _bt_demo_choice == "Current demography" else "BTCC campaign universe"
         if _bt_demo_src is not None and len(_bt_demo_src) > 0:
