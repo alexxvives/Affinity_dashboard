@@ -1738,7 +1738,7 @@ def _render_momentum_matrix(
         # Fallback: if no in-cell control, compare against overall campaign mean
         _global_ctrl = _merged[_merged[_treat_col] == 0]
         _ctrl_ref    = _control_sub if len(_control_sub) > 0 else _merged
-        _ctrl_label  = "" if len(_control_sub) > 0 else " vs avg"
+        _ctrl_label  = ""
         _k1, _k2, _k3 = st.columns(3)
         _k1.metric("Audience size", f"{_n_total:,}")
         if campaign_type == "selectchk":
@@ -1748,7 +1748,7 @@ def _render_momentum_matrix(
             _bal_delta = (_bal_abs_t - _bal_abs_c) if not (np.isnan(_bal_abs_t) or np.isnan(_bal_abs_c)) else float("nan")
             _k2.metric("Avg balance change",
                        f"${_bal_abs_t:,.0f}" if not np.isnan(_bal_abs_t) else "—",
-                       delta=f"${_bal_delta:+,.0f}{_ctrl_label}" if not np.isnan(_bal_delta) else None)
+                       delta=f"{_bal_delta:+,.0f}" if not np.isnan(_bal_delta) else None)
             # Net new accounts opened (end_accounts - start_accounts)
             if "accounts_net" in _treated_sub.columns:
                 _acc_t = float(_treated_sub["accounts_net"].mean()) if len(_treated_sub) > 0 else float("nan")
@@ -1756,7 +1756,7 @@ def _render_momentum_matrix(
                 _acc_d = (_acc_t - _acc_c) if not (np.isnan(_acc_t) or np.isnan(_acc_c)) else float("nan")
                 _k3.metric("Accounts opened",
                            f"{_acc_t:+.2f}" if not np.isnan(_acc_t) else "—",
-                           delta=f"{_acc_d:+.2f}{_ctrl_label}" if not np.isnan(_acc_d) else None)
+                           delta=f"{_acc_d:+.2f}" if not np.isnan(_acc_d) else None)
             else:
                 _k3.metric("Accounts opened", "—")
         else:
