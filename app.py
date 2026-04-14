@@ -1501,17 +1501,18 @@ def _render_momentum_matrix(
     with _ax_c1:
         st.caption("**X-axis**")
         _x_axis = st.segmented_control(
-            "X-axis", _METRIC_LABELS, default=_METRIC_LABELS[0],
+            "X-axis", _METRIC_LABELS, default="Churn Score",
             key=f"{tab_key}_xaxis", label_visibility="collapsed",
-        ) or _METRIC_LABELS[0]
+        ) or "Churn Score"
     with _ax_c2:
         _y_opts = [m for m in _METRIC_LABELS if m != _x_axis]
         _y_key  = f"{tab_key}_yaxis_{_x_axis}"
+        _y_default = "CLV 2yr" if "CLV 2yr" in _y_opts else _y_opts[0]
         st.caption("**Y-axis**")
         _y_axis = st.segmented_control(
-            "Y-axis", _y_opts, default=_y_opts[0],
+            "Y-axis", _y_opts, default=_y_default,
             key=_y_key, label_visibility="collapsed",
-        ) or _y_opts[0]
+        ) or _y_default
 
     _x_col = _METRIC_OPTS[_x_axis]
     _y_col = _METRIC_OPTS[_y_axis]
