@@ -19,9 +19,8 @@ import streamlit.components.v1 as components
 SEGMENT_LABELS: Dict[str, str] = {}
 SEGMENT_DESCRIPTIONS: Dict[str, str] = {}
 PRODUCT_COLS: List[str] = [
-    "Business Line Of Credit", "Cdira", "Checking", "Commercial Loan",
-    "Credit Card", "Escrow", "Standalone Savings", "Home Equity",
-    "Investments", "Loan", "Loan - Personal", "Loc - Personal",
+    "Business Line Of Credit", "Cdira", "Checking",
+    "Credit Card", "Investments", "Loan",
     "Money Market", "Mortgage", "Odloc", "Other", "Savings",
 ]
 
@@ -95,7 +94,7 @@ def _load_csv(b: bytes) -> pd.DataFrame:
 
 @st.cache_data(show_spinner=False)
 def _load_audience_profile(b: bytes) -> pd.DataFrame:
-    """Load audience_profile.csv from bytes, pre-computing derived columns if not already present."""
+    """Load a demography CSV from bytes, always computing derived columns."""
     aud = pd.read_csv(io.BytesIO(b))
     today = pd.Timestamp.today().normalize()
     if "age" not in aud.columns or not pd.api.types.is_numeric_dtype(aud["age"]):
@@ -104,9 +103,9 @@ def _load_audience_profile(b: bytes) -> pd.DataFrame:
         aud["tenure_years"] = (today - pd.to_datetime(aud["date_first_relation"], errors="coerce")).dt.days / 365.25
     if "sow" not in aud.columns:
         aud["sow"] = (aud["amount_deposit_spot_balance"] / aud["total_deposits_ixi"]).clip(0, 1)
-    if "n_products" not in aud.columns:
-        present_prod_cols = [c for c in PRODUCT_COLS if c in aud.columns]
-        aud["n_products"] = aud[present_prod_cols].fillna(0).sum(axis=1).astype(int)
+    # Always recompute n_products from present product columns (column removed from CSV)
+    present_prod_cols = [c for c in PRODUCT_COLS if c in aud.columns]
+    aud["n_products"] = aud[present_prod_cols].fillna(0).sum(axis=1).astype(int)
     # ── Momentum Matrix fields ─────────────────────────────────────────────
     if "annual_revenue" not in aud.columns:
         _rng_mm = np.random.default_rng(42)
@@ -583,7 +582,7 @@ def style_tbl(
 
     fmt = {col: _fmt_pct for col in pct_cols if col in disp.columns}
     fmt.update({col: "{:,.0f}" for col in n_cols if col in disp.columns})
-    for _tc in ["% Targeted", "% Population", "Targeting Lift"]:
+    for _tc in ["% Targeted", "% Eligible", "Targeting Lift"]:
         if _tc in disp.columns:
             fmt[_tc] = _fmt_pct
 
@@ -1324,13 +1323,26 @@ with _camp_col:
         label_visibility="collapsed",
     )
 
-# ── Load audience profile (shared across all campaigns) ──────────────────────
-_aud_profile_path = _APP_DIR / "audience_profile.csv"
-try:
-    with open(_aud_profile_path, "rb") as _f:
-        _aud_df = _load_audience_profile(_f.read())
-except FileNotFoundError:
-    _aud_df = None
+# ── Load demography files ────────────────────────────────────────────────────
+# current_demography.csv  = overall population snapshot
+# SELECTCHK_demography.csv = population at SELECTCHK campaign time
+# BTCC_demography.csv      = full eligible universe at CC BT campaign time
+# Falls back to audience_profile.csv if campaign-specific file not present.
+def _try_load_demography(*names: str) -> "pd.DataFrame | None":
+    """Try each filename in order; return the first that exists, else None."""
+    for name in names:
+        _p = _APP_DIR / name
+        if _p.exists():
+            try:
+                with open(_p, "rb") as _f:
+                    return _load_audience_profile(_f.read())
+            except Exception:
+                continue
+    return None
+
+_aud_df          = _try_load_demography("current_demography.csv", "audience_profile.csv")
+_selectchk_demo  = _try_load_demography("SELECTCHK_demography.csv", "current_demography.csv", "audience_profile.csv")
+_btcc_demo       = _try_load_demography("BTCC_demography.csv", "current_demography.csv", "audience_profile.csv")
 
 # ── shared multi-table HTML renderer used by all campaign branches ───────────
 def _two_tables_html(items: list, height: int) -> str:
@@ -2249,17 +2261,17 @@ if active_campaign == "SELECTCHK":
                               combo_treated_keys=_combo_treated_keys, _ver=2)
 
         # ── Targeting coverage columns ────────────────────────────────────────
+        # Denominator = treated + control = full eligible universe
         if not tbl.empty:
-            _n_sel_t = int(df[df["contact_flag"] == 1]["alpha_key"].nunique())
-            _n_sel_c = int(df[df["control_flag"] == 1]["alpha_key"].nunique())
-            _seg_t_ct = (df[df["contact_flag"] == 1]
-                         .groupby("nsegment")["alpha_key"].nunique().rename(index=str))
-            _seg_c_ct = (df[df["control_flag"] == 1]
-                         .groupby("nsegment")["alpha_key"].nunique().rename(index=str))
+            _n_sel_t   = int(df[df["contact_flag"] == 1]["alpha_key"].nunique())
+            _n_eligible = int(df["alpha_key"].nunique())
+            _seg_t_ct  = (df[df["contact_flag"] == 1]
+                          .groupby("nsegment")["alpha_key"].nunique().rename(index=str))
+            _seg_all_ct = (df.groupby("nsegment")["alpha_key"].nunique().rename(index=str))
             _s_idx = tbl.index.astype(str)
             tbl["% Targeted"] = (_seg_t_ct.reindex(_s_idx).fillna(0) / max(_n_sel_t, 1)).values
-            tbl["% Population"] = (_seg_c_ct.reindex(_s_idx).fillna(0) / max(_n_sel_c, 1)).values
-            tbl["Targeting Lift"] = (tbl["% Targeted"] - tbl["% Population"]).values
+            tbl["% Eligible"]  = (_seg_all_ct.reindex(_s_idx).fillna(0) / max(_n_eligible, 1)).values
+            tbl["Targeting Lift"] = (tbl["% Targeted"] - tbl["% Eligible"]).values
 
         if tbl.empty:
             # Show diagnostic info so user knows exactly why nothing appears
@@ -2734,11 +2746,14 @@ if active_campaign == "SELECTCHK":
                     _and_note = f", {len(_and_idx)} mandatory AND" if _and_idx else ""
                     st.success(f"Sent {len(_ra_shown_segs)} segment{'s' if len(_ra_shown_segs) != 1 else ''} to the Audience Simulator{_and_note} (+ {len(_ra_bot_segs)} excluded).")
 
-        # ── Audience Demographics (all customers in audience_profile.csv) ─────────
-        if _aud_df is not None and len(_aud_df) > 0:
+        # ── Audience Demographics ─────────────────────────────────────────────────
+        _schk_demo_src = _selectchk_demo if _selectchk_demo is not None else _aud_df
+        if _schk_demo_src is not None and len(_schk_demo_src) > 0:
+            _demo_lbl = "SELECTCHK campaign universe" if _selectchk_demo is not None else "overall population"
             st.divider()
-            st.subheader("Audience Demographics — All Customers")
-            st.caption(f"{len(_aud_df):,} customers in audience_profile.csv")
+            st.subheader("Audience Demographics")
+            st.caption(f"{len(_schk_demo_src):,} customers — {_demo_lbl}")
+            _d_override = _schk_demo_src  # used by the block below instead of _aud_df
             import plotly.graph_objects as go
             from scipy.stats import gaussian_kde as _gkde_dt
 
@@ -2755,7 +2770,7 @@ if active_campaign == "SELECTCHK":
                                   line=dict(color=line_color, width=2.5),
                                   showlegend=False, name="")
 
-            _d = _aud_df.copy()
+            _d = _schk_demo_src.copy()
 
             # Row 1: Age + Gender
             _d1, _d2 = st.columns([3, 2])
@@ -3917,16 +3932,16 @@ elif active_campaign == "CC_BT":
             _bt_disp = _bt_disp.rename(columns=_col_rename)
 
             # ── Targeting coverage columns ────────────────────────────────────
-            _n_bt_t = int(_bt_df[_bt_df["control_flag"] == 0]["alpha_key"].nunique())
-            _n_bt_c = int(_bt_df[_bt_df["control_flag"] == 1]["alpha_key"].nunique())
-            _bt_seg_t = (_bt_df[_bt_df["control_flag"] == 0]
-                         .groupby("nsegment")["alpha_key"].nunique().rename(index=str))
-            _bt_seg_c = (_bt_df[_bt_df["control_flag"] == 1]
-                         .groupby("nsegment")["alpha_key"].nunique().rename(index=str))
+            # Denominator = treated + control = full eligible universe
+            _n_bt_t    = int(_bt_df[_bt_df["control_flag"] == 0]["alpha_key"].nunique())
+            _n_bt_elig = int(_bt_df["alpha_key"].nunique())
+            _bt_seg_t   = (_bt_df[_bt_df["control_flag"] == 0]
+                           .groupby("nsegment")["alpha_key"].nunique().rename(index=str))
+            _bt_seg_all = (_bt_df.groupby("nsegment")["alpha_key"].nunique().rename(index=str))
             _bt_idx2 = _bt_disp.index
             _bt_disp["% Targeted"] = (_bt_seg_t.reindex(_bt_idx2).fillna(0) / max(_n_bt_t, 1)).values
-            _bt_disp["% Population"] = (_bt_seg_c.reindex(_bt_idx2).fillna(0) / max(_n_bt_c, 1)).values
-            _bt_disp["Targeting Lift"] = (_bt_disp["% Targeted"] - _bt_disp["% Population"]).values
+            _bt_disp["% Eligible"]  = (_bt_seg_all.reindex(_bt_idx2).fillna(0) / max(_n_bt_elig, 1)).values
+            _bt_disp["Targeting Lift"] = (_bt_disp["% Targeted"] - _bt_disp["% Eligible"]).values
 
             # Colour the lift column
             def _bt_colour(series):
@@ -3936,7 +3951,7 @@ elif active_campaign == "CC_BT":
                 )
 
             _fmt_map = {_val_label: _fmt_fn, "±CI": _fmt_fn,
-                        "% Targeted": "{:.1%}", "% Population": "{:.1%}", "Targeting Lift": "{:+.1%}"}
+                        "% Targeted": "{:.1%}", "% Eligible": "{:.1%}", "Targeting Lift": "{:+.1%}"}
             _styled_bt = _bt_disp.style.format(_fmt_map, na_rep="")
             if "N (treated)" in _bt_disp.columns:
                 _styled_bt = _styled_bt.format(
@@ -4103,11 +4118,14 @@ elif active_campaign == "CC_BT":
                     st.session_state["bt_sim_run_triggered"] = True
                     st.success(f"Sent {len(_bt_ra_shown_segs)} segments to Audience Simulator "
                                f"(+ {len(_bt_ra_bot_segs)} excluded).")
-        # ── Audience Demographics (all customers in audience_profile.csv) ─────
-        if _aud_df is not None and len(_aud_df) > 0:
+        # ── Audience Demographics ─────────────────────────────────────────────
+        _bt_demo_src = _btcc_demo if _btcc_demo is not None else _aud_df
+        if _bt_demo_src is not None and len(_bt_demo_src) > 0:
+            _bt_demo_lbl = "BTCC campaign universe" if _btcc_demo is not None else "overall population"
             st.divider()
-            st.subheader("Audience Demographics — All Customers")
-            st.caption(f"{len(_aud_df):,} customers in audience_profile.csv")
+            st.subheader("Audience Demographics")
+            st.caption(f"{len(_bt_demo_src):,} customers — {_bt_demo_lbl}")
+            _d_bt_override = _bt_demo_src
             import plotly.graph_objects as go
             from scipy.stats import gaussian_kde as _gkde_dt
 
@@ -4124,7 +4142,7 @@ elif active_campaign == "CC_BT":
                                   line=dict(color=line_color, width=2.5),
                                   showlegend=False, name="")
 
-            _d = _aud_df.copy()
+            _d = _bt_demo_src.copy()
             _d1, _d2 = st.columns([3, 2])
             with _d1:
                 _age_bins2   = [18, 25, 35, 45, 55, 65, 75, 120]
