@@ -1745,7 +1745,7 @@ def _render_momentum_matrix(
             _bal_delta = (_bal_abs_t - _bal_abs_c) if not (np.isnan(_bal_abs_t) or np.isnan(_bal_abs_c)) else float("nan")
             _k2.metric("Avg balance change",
                        f"${_bal_abs_t:,.0f}" if not np.isnan(_bal_abs_t) else "—",
-                       delta=f"{_bal_delta:+,.0f}" if not np.isnan(_bal_delta) else None)
+                       delta=(f"+${_bal_delta:,.0f}" if _bal_delta >= 0 else f"-${abs(_bal_delta):,.0f}") if not np.isnan(_bal_delta) else None)
             # Net new accounts opened (end_accounts - start_accounts)
             if "accounts_net" in _treated_sub.columns:
                 _acc_t = float(_treated_sub["accounts_net"].mean()) if len(_treated_sub) > 0 else float("nan")
