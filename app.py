@@ -1341,8 +1341,8 @@ def _try_load_demography(*names: str) -> "pd.DataFrame | None":
     return None
 
 _aud_df          = _try_load_demography("current_demography.csv", "audience_profile.csv")
-_selectchk_demo  = _try_load_demography("SELECTCHK_demography.csv", "current_demography.csv", "audience_profile.csv")
-_btcc_demo       = _try_load_demography("BTCC_demography.csv", "current_demography.csv", "audience_profile.csv")
+_selectchk_demo  = _try_load_demography("SELECTCHK_demography.csv")
+_btcc_demo       = _try_load_demography("BTCC_demography.csv")
 
 # ── shared multi-table HTML renderer used by all campaign branches ───────────
 def _two_tables_html(items: list, height: int) -> str:
@@ -2747,11 +2747,16 @@ if active_campaign == "SELECTCHK":
                     st.success(f"Sent {len(_ra_shown_segs)} segment{'s' if len(_ra_shown_segs) != 1 else ''} to the Audience Simulator{_and_note} (+ {len(_ra_bot_segs)} excluded).")
 
         # ── Audience Demographics ─────────────────────────────────────────────────
-        _schk_demo_src = _selectchk_demo if _selectchk_demo is not None else _aud_df
-        if _schk_demo_src is not None and len(_schk_demo_src) > 0:
-            _demo_lbl = "SELECTCHK campaign universe" if _selectchk_demo is not None else "overall population"
+        if _aud_df is not None or _selectchk_demo is not None:
             st.divider()
             st.subheader("Audience Demographics")
+            _schk_toggle_opts = ["Current demography"]
+            if _selectchk_demo is not None:
+                _schk_toggle_opts.append("Campaign demography")
+            _schk_demo_choice = st.radio("View", _schk_toggle_opts, horizontal=True, key="schk_demo_toggle", label_visibility="collapsed")
+            _schk_demo_src = _aud_df if _schk_demo_choice == "Current demography" else _selectchk_demo
+            _demo_lbl = "current population" if _schk_demo_choice == "Current demography" else "SELECTCHK campaign universe"
+        if _schk_demo_src is not None and len(_schk_demo_src) > 0:
             st.caption(f"{len(_schk_demo_src):,} customers — {_demo_lbl}")
             _d_override = _schk_demo_src  # used by the block below instead of _aud_df
             import plotly.graph_objects as go
@@ -4119,11 +4124,16 @@ elif active_campaign == "CC_BT":
                     st.success(f"Sent {len(_bt_ra_shown_segs)} segments to Audience Simulator "
                                f"(+ {len(_bt_ra_bot_segs)} excluded).")
         # ── Audience Demographics ─────────────────────────────────────────────
-        _bt_demo_src = _btcc_demo if _btcc_demo is not None else _aud_df
-        if _bt_demo_src is not None and len(_bt_demo_src) > 0:
-            _bt_demo_lbl = "BTCC campaign universe" if _btcc_demo is not None else "overall population"
+        if _aud_df is not None or _btcc_demo is not None:
             st.divider()
             st.subheader("Audience Demographics")
+            _bt_toggle_opts = ["Current demography"]
+            if _btcc_demo is not None:
+                _bt_toggle_opts.append("Campaign demography")
+            _bt_demo_choice = st.radio("View", _bt_toggle_opts, horizontal=True, key="btcc_demo_toggle", label_visibility="collapsed")
+            _bt_demo_src = _aud_df if _bt_demo_choice == "Current demography" else _btcc_demo
+            _bt_demo_lbl = "current population" if _bt_demo_choice == "Current demography" else "BTCC campaign universe"
+        if _bt_demo_src is not None and len(_bt_demo_src) > 0:
             st.caption(f"{len(_bt_demo_src):,} customers — {_bt_demo_lbl}")
             _d_bt_override = _bt_demo_src
             import plotly.graph_objects as go
