@@ -15,5 +15,8 @@ _build_*.py
 .DS_Store
 Thumbs.db
 
+# Playwright MCP debug output
+.playwright-mcp/
+
 # Streamlit local state (keep config.toml committed; ignore secrets)
 .streamlit/secrets.toml
