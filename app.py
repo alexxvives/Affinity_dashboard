@@ -88,8 +88,7 @@ def _df_hash(df: pd.DataFrame) -> int:
 
 @st.cache_data(show_spinner=False)
 def _load_csv(b: bytes) -> pd.DataFrame:
-    df = pd.read_csv(io.BytesIO(b))
-    return df.rename(columns={"Communication": "communication", "Contact_flag": "contact_flag"})
+    return pd.read_csv(io.BytesIO(b))
 
 
 @st.cache_data(show_spinner=False)
@@ -143,15 +142,7 @@ CAMPAIGNS: Dict[str, Dict] = {
 
 @st.cache_data(show_spinner=False)
 def _load_cc_bt(b: bytes) -> pd.DataFrame:
-    df = pd.read_csv(io.BytesIO(b))
-    df.columns = df.columns.str.lower().str.strip()
-    # Support legacy column names from older CSV exports
-    df = df.rename(columns={"bt_amount": "bt_transaction_amount",
-                             "bt_date":   "bt_transaction_date"})
-    # Derive bt_flag from amount if not present (flag=1 when a transfer occurred)
-    if "bt_flag" not in df.columns and "bt_transaction_amount" in df.columns:
-        df["bt_flag"] = (df["bt_transaction_amount"] > 0).astype(int)
-    return df
+    return pd.read_csv(io.BytesIO(b))
 
 
 @st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
@@ -229,12 +220,10 @@ def _cc_bt_seg_ids(df_raw: pd.DataFrame) -> List[str]:
 @st.cache_data(show_spinner=False, hash_funcs={pd.DataFrame: _df_hash})
 def preprocess(df_raw: pd.DataFrame, date_min: Optional[str], date_max: Optional[str], bal_clip_pct: float = 0.0) -> pd.DataFrame:
     df = df_raw.copy()
-    df.columns = df.columns.str.lower().str.strip()  # normalise: Communication→communication, Contact_flag→contact_flag
     df["start_date"] = pd.to_datetime(df["start_date"], errors="coerce")
     df["end_date"]   = pd.to_datetime(df["end_date"],   errors="coerce")
     df["communication"] = df["communication"].astype(str).str.strip()
-    df["contact_flag"]  = pd.to_numeric(df["contact_flag"], errors="coerce").fillna(0).astype(int)
-    df["control_flag"] = (df["contact_flag"] == 0).astype(int)
+    df["contact_flag"]  = pd.to_numeric(df["contact_flag"], errors="coerce").astype(int)
     for col in ["start_balance", "end_balance", "start_accounts", "end_accounts"]:
         df[col] = pd.to_numeric(df[col], errors="coerce")
 
