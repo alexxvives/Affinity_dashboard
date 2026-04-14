@@ -1738,7 +1738,8 @@ def _render_momentum_matrix(
         _ctrl_ref    = _control_sub if len(_control_sub) > 0 else _merged
         _ctrl_label  = ""
         _k1, _k2, _k3 = st.columns(3)
-        _k1.metric("Audience size", f"{_n_total:,}")
+        _k1.metric("Audience size", f"{_n_total:,}",
+                   help="Total customers (treated + control) in this matrix cell.")
         if campaign_type == "selectchk":
             # Avg absolute balance change in $ (treated), delta vs ctrl (or campaign avg)
             _bal_abs_t = float(_treated_sub["balance_abs_change"].mean()) if len(_treated_sub) > 0 else float("nan")
@@ -1746,7 +1747,8 @@ def _render_momentum_matrix(
             _bal_delta = (_bal_abs_t - _bal_abs_c) if not (np.isnan(_bal_abs_t) or np.isnan(_bal_abs_c)) else float("nan")
             _k2.metric("Avg balance change",
                        f"${_bal_abs_t:,.0f}" if not np.isnan(_bal_abs_t) else "—",
-                       delta=(f"+${_bal_delta:,.0f}" if _bal_delta >= 0 else f"-${abs(_bal_delta):,.0f}") if not np.isnan(_bal_delta) else None)
+                       delta=(f"+${_bal_delta:,.0f}" if _bal_delta >= 0 else f"-${abs(_bal_delta):,.0f}") if not np.isnan(_bal_delta) else None,
+                       help="Average absolute $ change in deposit balance for treated customers (end − start). Delta = treated minus control group in this cell (or campaign average if no control in cell).")
             # Net new accounts opened (end_accounts - start_accounts)
             if "accounts_net" in _treated_sub.columns:
                 _acc_t = float(_treated_sub["accounts_net"].mean()) if len(_treated_sub) > 0 else float("nan")
@@ -1754,7 +1756,8 @@ def _render_momentum_matrix(
                 _acc_d = (_acc_t - _acc_c) if not (np.isnan(_acc_t) or np.isnan(_acc_c)) else float("nan")
                 _k3.metric("Accounts opened",
                            f"{_acc_t:+.2f}" if not np.isnan(_acc_t) else "—",
-                           delta=f"{_acc_d:+.2f}" if not np.isnan(_acc_d) else None)
+                           delta=f"{_acc_d:+.2f}" if not np.isnan(_acc_d) else None,
+                           help="Average net new accounts opened per treated customer (end accounts − start accounts). Delta = treated minus control group in this cell.")
             else:
                 _k3.metric("Accounts opened", "—")
         else:
@@ -1774,14 +1777,16 @@ def _render_momentum_matrix(
             _amt_delta = (_avg_conv_amt - _avg_conv_amt_c) if not (np.isnan(_avg_conv_amt) or np.isnan(_avg_conv_amt_c)) else float("nan")
             _k2.metric("Avg transaction",
                        f"${_avg_conv_amt:,.0f}" if not np.isnan(_avg_conv_amt) else "—",
-                       delta=f"${_amt_delta:+,.0f}" if not np.isnan(_amt_delta) else None)
+                       delta=(f"+${_amt_delta:,.0f}" if _amt_delta >= 0 else f"-${abs(_amt_delta):,.0f}") if not np.isnan(_amt_delta) else None,
+                       help="Average balance transfer amount among customers who converted (did a BT). Delta = treated converters minus control converters.")
             # BT conversion rate (treated vs control)
             _bt_rate   = float(_treated_sub[_outcome_col].mean()) if len(_treated_sub) > 0 else float("nan")
             _bt_rate_c = float(_control_sub[_outcome_col].mean())  if len(_control_sub) > 0 else float("nan")
             _bt_lift_d = (_bt_rate - _bt_rate_c) if not (np.isnan(_bt_rate) or np.isnan(_bt_rate_c)) else float("nan")
             _k3.metric("Conversion rate",
                        f"{_bt_rate:.1%}" if not np.isnan(_bt_rate) else "—",
-                       delta=f"{_bt_lift_d:+.1%}" if not np.isnan(_bt_lift_d) else None)
+                       delta=f"{_bt_lift_d:+.1%}" if not np.isnan(_bt_lift_d) else None,
+                       help="Share of treated customers in this cell who completed a balance transfer. Delta = treated rate minus control rate (lift).")
 
         # ── Demographics ────────────────────────────────────────────────────
         if len(_subset) > 0:
