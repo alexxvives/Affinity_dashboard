@@ -1324,10 +1324,8 @@ with _camp_col:
     )
 
 # ── Load demography files ────────────────────────────────────────────────────
-# current_demography.csv  = overall population snapshot
-# SELECTCHK_demography.csv = population at SELECTCHK campaign time
-# BTCC_demography.csv      = full eligible universe at CC BT campaign time
-# Falls back to audience_profile.csv if campaign-specific file not present.
+# current_SELECTCHK_demography.csv = population at SELECTCHK campaign time
+# current_BTCC_demography.csv      = full eligible universe at CC BT campaign time
 def _try_load_demography(*names: str) -> "pd.DataFrame | None":
     """Try each filename in order; return the first that exists, else None."""
     for name in names:
@@ -1340,9 +1338,8 @@ def _try_load_demography(*names: str) -> "pd.DataFrame | None":
                 continue
     return None
 
-_aud_df          = _try_load_demography("current_demography.csv", "audience_profile.csv")
-_selectchk_demo  = _try_load_demography("SELECTCHK_demography.csv")
-_btcc_demo       = _try_load_demography("BTCC_demography.csv")
+_selectchk_demo  = _try_load_demography("current_SELECTCHK_demography.csv")
+_btcc_demo       = _try_load_demography("current_BTCC_demography.csv")
 
 # ── shared multi-table HTML renderer used by all campaign branches ───────────
 def _two_tables_html(items: list, height: int) -> str:
@@ -2744,16 +2741,12 @@ if active_campaign == "SELECTCHK":
                     st.success(f"Sent {len(_ra_shown_segs)} segment{'s' if len(_ra_shown_segs) != 1 else ''} to the Audience Simulator{_and_note} (+ {len(_ra_bot_segs)} excluded).")
 
         # ── Audience Demographics ─────────────────────────────────────────────────
-        if _aud_df is not None or _selectchk_demo is not None:
+        if _selectchk_demo is not None:
             st.divider()
             st.subheader("Audience Demographics")
-            _schk_toggle_opts = ["Current demography"]
-            if _selectchk_demo is not None:
-                _schk_toggle_opts.append("Campaign demography")
-            _schk_demo_choice = st.segmented_control("View", _schk_toggle_opts, default=_schk_toggle_opts[0], key="schk_demo_toggle", label_visibility="collapsed")
-            _schk_demo_src = _aud_df if _schk_demo_choice == "Current demography" else _selectchk_demo
-            _demo_lbl = "current population" if _schk_demo_choice == "Current demography" else "SELECTCHK campaign universe"
-        if _schk_demo_src is not None and len(_schk_demo_src) > 0:
+            _schk_demo_src = _selectchk_demo
+            _demo_lbl = "SELECTCHK campaign universe"
+        if _selectchk_demo is not None and len(_selectchk_demo) > 0:
             st.caption(f"{len(_schk_demo_src):,} customers — {_demo_lbl}")
             _d_override = _schk_demo_src  # used by the block below instead of _aud_df
             import plotly.graph_objects as go
@@ -3343,10 +3336,10 @@ if active_campaign == "SELECTCHK":
                 # ── Audience Profile ──────────────────────────────────────────────────────
                 st.markdown("---")
                 st.markdown("#### Audience Profile")
-                if _aud_df is None:
+                if _selectchk_demo is None:
                     st.info(
                         "No audience profile data found. "
-                        "Please provide an `audience_profile.csv` file."
+                        "Please provide a `current_SELECTCHK_demography.csv` file."
                     )
                 else:
                     # Resolve final user set: users in the selected (OR+AND) segments minus NOT
@@ -3356,7 +3349,7 @@ if active_campaign == "SELECTCHK":
                         _aud_keys = _aud_or_keys[~_aud_or_keys.isin(_aud_excl_keys)].unique()
                     else:
                         _aud_keys = _aud_or_keys.unique()
-                    _aud = _aud_df[_aud_df["alpha_key"].isin(_aud_keys)].copy()
+                    _aud = _selectchk_demo[_selectchk_demo["alpha_key"].isin(_aud_keys)].copy()
                     if len(_aud) == 0:
                         st.info("No demographic records found for the selected segments.")
                     else:
@@ -3750,7 +3743,7 @@ if active_campaign == "SELECTCHK":
 
     with tab_matrix:
         _render_momentum_matrix(
-            df_raw, _aud_df, campaign_type="selectchk", tab_key="mm_schk"
+            df_raw, _selectchk_demo, campaign_type="selectchk", tab_key="mm_schk"
         )
 
 
@@ -4121,16 +4114,12 @@ elif active_campaign == "CC_BT":
                     st.success(f"Sent {len(_bt_ra_shown_segs)} segments to Audience Simulator "
                                f"(+ {len(_bt_ra_bot_segs)} excluded).")
         # ── Audience Demographics ─────────────────────────────────────────────
-        if _aud_df is not None or _btcc_demo is not None:
+        if _btcc_demo is not None:
             st.divider()
             st.subheader("Audience Demographics")
-            _bt_toggle_opts = ["Current demography"]
-            if _btcc_demo is not None:
-                _bt_toggle_opts.append("Campaign demography")
-            _bt_demo_choice = st.segmented_control("View", _bt_toggle_opts, default=_bt_toggle_opts[0], key="btcc_demo_toggle", label_visibility="collapsed")
-            _bt_demo_src = _aud_df if _bt_demo_choice == "Current demography" else _btcc_demo
-            _bt_demo_lbl = "current population" if _bt_demo_choice == "Current demography" else "BTCC campaign universe"
-        if _bt_demo_src is not None and len(_bt_demo_src) > 0:
+            _bt_demo_src = _btcc_demo
+            _bt_demo_lbl = "BTCC campaign universe"
+        if _btcc_demo is not None and len(_btcc_demo) > 0:
             st.caption(f"{len(_bt_demo_src):,} customers — {_bt_demo_lbl}")
             _d_bt_override = _bt_demo_src
             import plotly.graph_objects as go
@@ -4504,8 +4493,8 @@ elif active_campaign == "CC_BT":
                 )
                 st.markdown("---")
                 st.markdown("#### Audience Profile")
-                if _aud_df is None:
-                    st.info("No audience profile data found. Please provide an audience_profile.csv file.")
+                if _btcc_demo is None:
+                    st.info("No audience profile data found. Please provide a current_BTCC_demography.csv file.")
                 else:
                     _bt_aud_keys2 = _bt_df[
                         (_bt_df["control_flag"] == 0) & (_bt_df["nsegment"].astype(str).isin(_bt_compute_segs))
@@ -4515,7 +4504,7 @@ elif active_campaign == "CC_BT":
                             (_bt_df["control_flag"] == 0) & (_bt_df["nsegment"].astype(str).isin(_bt_compute_excl))
                         ]["alpha_key"])
                         _bt_aud_keys2 = _bt_aud_keys2[~_bt_aud_keys2.isin(_bt_aud_excl2)]
-                    _bt_aud2 = _aud_df[_aud_df["alpha_key"].isin(_bt_aud_keys2.unique())].copy()
+                    _bt_aud2 = _btcc_demo[_btcc_demo["alpha_key"].isin(_bt_aud_keys2.unique())].copy()
                     if len(_bt_aud2) == 0:
                         st.info("No demographic records for the selected segments.")
                     else:
@@ -4657,5 +4646,5 @@ elif active_campaign == "CC_BT":
 
     with _bt_tab_matrix:
         _render_momentum_matrix(
-            _bt_raw, _aud_df, campaign_type="cc_bt", tab_key="mm_ccbt"
+            _bt_raw, _btcc_demo, campaign_type="cc_bt", tab_key="mm_ccbt"
         )
